@@ -160,9 +160,9 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    print("注意：本 harness 的 console 是 ConPTY（伪终端），与真人双击开的")
+    print("注意：自动化/受限环境里的 console 可能是 ConPTY（伪终端），与真人双击开的")
     print("conhost 窗口不完全等价；结论以进程/console 归属关系为准。")
-    print("最终验证必须在真人 PowerShell 里做（见 HANDOVER §5.12 的验证步骤）。")
+    print("最终验证必须在真人 PowerShell 里做。")
     print("=" * 78)
     return 0
 

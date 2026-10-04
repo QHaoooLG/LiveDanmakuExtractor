@@ -1,11 +1,11 @@
 """启动器核心：**在同一进程内**托管面板，供托盘应用与单文件 exe 使用。
 
-为什么要有这个模块（对应 DEC-6 / HANDOVER §5.13）：
+为什么要有这个模块：
 
 * `cli.py::_run_web_foreground()` 是**前台阻塞**的，且 `web start` 会 spawn 子进程 ——
   而那条路径在 Windows 上有个已定位的缺陷：venv 的 `python.exe` 是转发器 stub，
   它起的 base 解释器会**新分配一个 console**，关掉那个窗口就连坐杀掉面板
-  （见 HANDOVER §5.12）。
+  （详见 runtime.py 的说明）。
 * 把 uvicorn 跑在**本进程的一个后台线程**里，就完全没有子进程、没有多余 console，
   那个缺陷在架构上消失；同时托盘/启动面板可以直接读 `hub` 状态，不必发 HTTP。
 

@@ -1,6 +1,6 @@
 """一次性探针：查实 `web start -> venv stub -> 真 server` 的进程关系。
 
-回答四个问题（HANDOVER §5.12 的"未 100% 证实"清单）：
+回答四个问题（关于"关掉终端后托盘面板是否还活着"的排查清单）：
 
 1. venv 的 `python.exe` 是不是转发器 stub（会再起一个 base 解释器）？
 2. 每一层进程是否在 **Job Object** 里？job 是否带 `KILL_ON_JOB_CLOSE`？

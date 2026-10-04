@@ -18,7 +18,7 @@ from ..config import Config
 from ..models import Event, EventType, SessionMeta
 from .base import RotatingFileWriter, Sink
 
-#: CSV 列顺序（与 TECH_DESIGN §6.3 一致）
+#: CSV 列顺序（改这里要同步改读取方）
 CSV_COLUMNS = (
     "ts",
     "type",

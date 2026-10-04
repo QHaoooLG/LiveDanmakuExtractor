@@ -5,9 +5,9 @@
 这块逻辑原本长在 `launcher.py` 里（`LoginStatus` / `QrLoginSession` /
 `PanelController.check_login`），而 `launcher` 是"托盘应用的核心"。结果是：
 
-* `launcher.py` 一路涨到 668 行、覆盖率掉到 **85%**（刚好压在门禁线上）；
-* 登录状态机**想单测就得构造一个 `PanelController`**（要 config、要端口、
-  要凭据文件），于是自然就少测了；
+* `launcher.py` 一路涨到 668 行，职责开始互相纠缠；
+* 登录状态机要验证就得构造一个完整的 `PanelController`（要 config、要端口、
+  要凭据文件），耦合太重；
 * 后面还要给"**运行中**凭据失效"做提示（面板与托盘都要用），
   再堆在 launcher 里就会变成第二个上帝对象。
 

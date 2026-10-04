@@ -4,7 +4,6 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 build/
@@ -19,7 +18,7 @@ cookies*.json
 # ---- 运行期产物 ----
 data/
 data_*/          # 验证用的一次性输出目录（如 data_filtered / data_panel）
-out_*/           # export / replay 的输出目录
+out_*/           # export / replay / --dump-raw 的输出目录
 *.jsonl
 *.csv
 *.db
@@ -28,29 +27,14 @@ out_*/           # export / replay 的输出目录
 
 # ---- 前端依赖与构建 ----
 # 注意写 `**/`：`web/.npmrc` 把 npm 缓存指到了**相对路径** `.npm-cache`，
-# 而 npm 是从 `web/` 起跑的 ⇒ 实际落在 `web/.npm-cache`。
-# 只写根级 `.npm-cache/` 会漏掉它（实测漏了 268 个文件）。
+# 而 npm 是从 `web/` 起跑的 ⇒ 实际落在 `web/.npm-cache`，只写根级目录会漏掉它。
 **/.npm-cache/
-web/node_modules/
-
-# ---- 保留测试夹具（显式豁免上面的数据文件规则）----
-!tests/fixtures/**
-!tests/fixtures/*.json
-!tests/fixtures/*.jsonl
-!tests/fixtures/packets/**
-
-# ---- 前端构建产物 ----
 web/node_modules/
 web/dist/
 
-# ---- 离线安装的 wheel 缓存（本机 pip 网络不可用时的产物）----
+# ---- 离线 wheel 缓存（pip 网络不可用时的兜底产物，不入库）----
 wheels/
 .pipcheck/
-
-# ---- 覆盖率产物（M4）----
-.coverage
-.coverage.*
-htmlcov/
 
 # ---- 打包暂存（tools/build_wheel.py 构建期间临时存在，构建完自动清理）----
 src/bili_danmaku/web_dist/
@@ -62,13 +46,13 @@ src/bili_danmaku/web_dist/
 # 注意：assets/app.ico **要入库**（由 tools/make_icon.py 生成，
 # 打包时直接用它作为 exe 图标；入库可避免"打包依赖 Pillow"）。
 
-# ---- 词云/PNG 的临时产物（V2）----
+# ---- 词云 / 压测的临时产物 ----
 data_wc/
 data_stress/
-# matplotlib 字体缓存：默认写用户目录，受限沙箱会 Permission denied，故重定向到工作区内
+# matplotlib 字体缓存：默认写用户目录，受限环境会 Permission denied，故重定向到仓库内
 .matplotlib-cache/
 
-# ---- 面板托管运行期状态（pid / 端口 / 日志；V2-c）----
+# ---- 面板托管运行期状态（pid / 端口 / 日志）----
 .runtime/
 
 # ---- 编辑器 / 系统 ----

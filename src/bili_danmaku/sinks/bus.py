@@ -128,8 +128,7 @@ class SinkWorker:
         **为什么必须这样做**：`write()` 是同步 IO（SQLite 提交、文件 fsync）。
         直接在事件循环里调用它，只要磁盘一慢，整个循环就被卡住 ——
         心跳任务发不出去，采集器会判定「连接假死」并重连。
-        离线用例 `test_queue_full_keeps_newest_and_never_blocks_reader`
-        （一个故意 sleep 3 秒的 sink）实测复现了这条链路：
+        实测用一个故意 sleep 3 秒的 sink 就能复现这条链路：
         收 2 条 → 假死 → 重连，而队列根本没机会顶满。
 
         刻意**不加超时**：卡死的 sink 只该拖住它自己，不该拖累心跳或读循环。

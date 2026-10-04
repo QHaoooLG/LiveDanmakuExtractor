@@ -171,7 +171,7 @@ def tray_command(
 def main(ctx: click.Context, config_path: str | None, verbose: int) -> None:
     """B 站直播弹幕提取器。
 
-    凭据只保存在本机 .secrets/ 且不进日志；详见 docs/PRIVACY.md
+    凭据只保存在本机 .secrets/ 且不进日志
 
     **不带子命令时**：打包成 exe（`sys.frozen`）就直接启动**托盘应用**
     （用户双击 exe 的预期行为）；从源码/命令行跑则打印帮助，避免误操作。
@@ -1947,7 +1947,7 @@ def web_start(
         )
     )
     # 解释器与环境：绕开 venv 的转发器 stub（否则会多一个 console 窗口，
-    # 关掉它面板就停 —— 见 runtime.child_python 与 HANDOVER §5.12）。
+    # 关掉它面板就停 —— 见 runtime.child_python 的说明）。
     from .runtime import child_python
 
     _executable, child_env = child_python()

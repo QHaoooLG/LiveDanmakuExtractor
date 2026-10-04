@@ -202,7 +202,7 @@ def main() -> int:
         print(f"  {cmd:36s} {n}")
 
     if samples:
-        out = Path("tests/fixtures")
+        out = Path("out_capture")
         out.mkdir(parents=True, exist_ok=True)
         path = out / "danmu_msg_samples.json"
         path.write_text(

@@ -6,7 +6,7 @@
   要"常驻"就必须能分离启动（`DETACHED_PROCESS`）并把 stdout/stderr 落到文件。
 * 分离之后**没有终端可以 Ctrl+C**，所以必须另有一条**可控的优雅停止**通道。
 
-Windows 上的两个实测结论决定了这里的实现（见 HANDOVER §4.4）：
+Windows 上的两个实测结论决定了这里的实现：
 
 * `CTRL_BREAK_EVENT` 对独立进程组里的 uvicorn **无效**（8 秒不退出）；
 * `taskkill /PID`（不带 `/F`）被系统拒绝（`Access denied`）。
@@ -251,7 +251,7 @@ def child_python() -> tuple[str, dict[str, str]]:
     **转发器 stub**，会再起一个 base 解释器，而那个 base 解释器是 **console 程序**、
     又拿不到父进程的 console ⇒ **Windows 给它新分配一个 conhost**。
     用户看到的就是"`web start` 之后多出来一个空终端窗口"，而且**关掉它面板就停**
-    （见 HANDOVER §5.12）。
+    （详见本模块关于 console 的说明）。
 
     绕开 stub 直接起 base 解释器后，顶层进程本身就是 server ⇒
     **没有多余的 console 可关**，那个缺陷从根上消失。
@@ -357,7 +357,7 @@ def server_argv(*args: str) -> list[str]:
     前者在"未安装 console script"的环境里也能跑，且不受 PATH 影响。
 
     解释器选择见 `child_python()` —— **刻意避开 venv 的转发器 stub**，
-    否则会多出一个 console 窗口，并造成"关终端连坐停面板"（HANDOVER §5.12）。
+    否则会多出一个 console 窗口，并造成"关终端连坐停面板"。
     """
     executable, _env = child_python()
     return [executable, "-m", "bili_danmaku", *args]

@@ -1,6 +1,6 @@
 """SQLite 落盘。
 
-设计要点（TECH_DESIGN §6.4 / §12.4）：
+设计要点：
 
 * WAL 模式 + `synchronous=NORMAL`，兼顾写入性能与可恢复性；
 * 一批事件 = 一个事务，结束时 `wal_checkpoint(TRUNCATE)` 收缩 WAL；
