@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import csv
 import io
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any
 
 #: 表名（用户直接看到的一行，用中文）
 TABLE_SUMMARY = "弹幕统计 · 概要"
@@ -60,22 +61,21 @@ def _bucket_label(seconds: float | None) -> str:
     return f"{value:g} 秒"
 
 
-def _write_table(
-    writer: Any,
-    title: str,
-    headers: list[str],
-    rows: Iterable[Iterable[Any]],
-) -> None:
-    """写一张表：`# 表名` + 列头 + 数据；表和表之间空一行。"""
-    writer.writerow([f"# {title}"])
-    writer.writerow(headers)
-    for row in rows:
-        writer.writerow(["" if item is None else item for item in row])
-    writer.writerow([])
+@dataclass
+class StatsTable:
+    """一张统计表：标题 + 列头 + 数据行。
+
+    为什么要有这个中间结构：CSV 与 xlsx 两种输出**必须用同一份表定义** ——
+    分开写两份的话，加一列就会漏掉另一边（这个项目已经在别处吃过"两处各写一份"的亏）。
+    """
+
+    title: str
+    headers: list[str]
+    rows: list[list[Any]]
 
 
-def build_stats_csv(payload: dict[str, Any]) -> str:
-    """把统计 payload 拼成 CSV 文本。
+def build_stats_tables(payload: dict[str, Any]) -> list[StatsTable]:
+    """把统计 payload 整理成若干张表（**纯函数，不涉及任何输出格式**）。
 
     `payload` 的字段（都由调用方从 store/hub 汇总好，本函数不认识数据库）：
 
@@ -86,9 +86,6 @@ def build_stats_csv(payload: dict[str, Any]) -> str:
     缺字段一律当"没有"，**不抛异常**：导出一份缺了几节的报告，
     也远比整个导出失败要好。
     """
-    buffer = io.StringIO(newline="")
-    writer = csv.writer(buffer, lineterminator="\r\n")
-
     by_type: dict[str, int] = dict(payload.get("by_type") or {})
     buckets: list[dict[str, Any]] = list(payload.get("buckets") or [])
     senders: list[dict[str, Any]] = list(payload.get("top_senders") or [])
@@ -96,77 +93,157 @@ def build_stats_csv(payload: dict[str, Any]) -> str:
     if total is None:
         total = sum(int(v or 0) for v in by_type.values())
 
-    # ---- 表 1：概要 ---------------------------------------------------- #
     room_id = payload.get("room_id")
-    _write_table(
-        writer,
-        TABLE_SUMMARY,
-        ["项目", "值"],
-        [
-            ["导出时间", _stamp(payload.get("exported_at"))],
-            ["主播", payload.get("anchor_name") or ""],
-            ["房间号", room_id if room_id is not None else "（全部房间）"],
-            ["统计起点", _stamp(payload.get("since"))],
-            ["统计终点", _stamp(payload.get("until"))],
-            ["时段长度", _bucket_label(payload.get("bucket_s"))],
-            ["弹幕总数", total],
-            ["有弹幕的时段数", len(buckets)],
-            ["时段峰值", max((int(b.get("count") or 0) for b in buckets), default=0)],
-            ["参与发言人数", len(senders)],
-        ],
-    )
+    tables: list[StatsTable] = [
+        StatsTable(
+            TABLE_SUMMARY,
+            ["项目", "值"],
+            [
+                ["导出时间", _stamp(payload.get("exported_at"))],
+                ["主播", payload.get("anchor_name") or ""],
+                ["房间号", room_id if room_id is not None else "（全部房间）"],
+                ["统计起点", _stamp(payload.get("since"))],
+                ["统计终点", _stamp(payload.get("until"))],
+                ["时段长度", _bucket_label(payload.get("bucket_s"))],
+                ["弹幕总数", total],
+                ["有弹幕的时段数", len(buckets)],
+                ["时段峰值", max((int(b.get("count") or 0) for b in buckets), default=0)],
+                ["参与发言人数", len(senders)],
+            ],
+        ),
+        StatsTable(
+            TABLE_BY_TYPE,
+            ["类型", "条数", "占比"],
+            [
+                [name, count, f"{(count / total * 100):.1f}%" if total else "0.0%"]
+                for name, count in sorted(by_type.items(), key=lambda kv: -kv[1])
+            ],
+        ),
+    ]
 
-    # ---- 表 2：类型分布 ------------------------------------------------ #
-    _write_table(
-        writer,
-        TABLE_BY_TYPE,
-        ["类型", "条数", "占比"],
-        [
-            [name, count, f"{(count / total * 100):.1f}%" if total else "0.0%"]
-            for name, count in sorted(by_type.items(), key=lambda kv: -kv[1])
-        ],
-    )
-
-    # ---- 表 3：每时段弹幕量（需求 1 的主角） ---------------------------- #
+    # 每时段弹幕量（需求的主角）。类型列取所有桶里出现过的类型并集，
+    # 保证每行列数一致（CSV 最怕列数参差，Excel 也读不成一张规整的表）。
     bucket_s = payload.get("bucket_s")
-    # 类型列取所有桶里出现过的类型并集，保证每行列数一致（CSV 最怕列数参差）
     type_columns: list[str] = []
     for bucket in buckets:
         for name in (bucket.get("by_type") or {}):
             if name not in type_columns:
                 type_columns.append(name)
 
-    _write_table(
-        writer,
-        TABLE_BUCKETS,
-        ["时段起点", "时段终点", "条数", *type_columns],
-        [
+    tables.append(
+        StatsTable(
+            TABLE_BUCKETS,
+            ["时段起点", "时段终点", "条数", *type_columns],
             [
-                _stamp(bucket.get("ts")),
-                _stamp(
-                    (float(bucket.get("ts")) + float(bucket_s))
-                    if bucket.get("ts") is not None and bucket_s
-                    else None
-                ),
-                int(bucket.get("count") or 0),
-                *[
-                    int((bucket.get("by_type") or {}).get(name, 0))
-                    for name in type_columns
-                ],
-            ]
-            for bucket in buckets
-        ],
+                [
+                    _stamp(bucket.get("ts")),
+                    _stamp(
+                        (float(bucket.get("ts")) + float(bucket_s))
+                        if bucket.get("ts") is not None and bucket_s
+                        else None
+                    ),
+                    int(bucket.get("count") or 0),
+                    *[
+                        int((bucket.get("by_type") or {}).get(name, 0))
+                        for name in type_columns
+                    ],
+                ]
+                for bucket in buckets
+            ],
+        )
     )
 
-    # ---- 表 4：发言 TOP ------------------------------------------------ #
-    _write_table(
-        writer,
-        TABLE_SENDERS,
-        ["排名", "昵称", "uid", "条数"],
-        [
-            [index + 1, item.get("uname") or "", item.get("uid") or "", int(item.get("count") or 0)]
-            for index, item in enumerate(senders)
-        ],
+    tables.append(
+        StatsTable(
+            TABLE_SENDERS,
+            ["排名", "昵称", "uid", "条数"],
+            [
+                [
+                    index + 1,
+                    item.get("uname") or "",
+                    item.get("uid") or "",
+                    int(item.get("count") or 0),
+                ]
+                for index, item in enumerate(senders)
+            ],
+        )
     )
+    return tables
 
+
+def build_stats_csv(payload: dict[str, Any]) -> str:
+    """拼成 CSV 文本：多张表用 `# 表名` 分节 + 空行隔开。
+
+    ⚠️ **CSV 没有工作表的概念**，所以"多张表"只能是竖向堆叠。
+    想按表分开看/做透视，用 `build_stats_xlsx()`（真正多 sheet）。
+    两者共用 `build_stats_tables()`，列不会漂移。
+    """
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    for table in build_stats_tables(payload):
+        writer.writerow([f"# {table.title}"])
+        writer.writerow(table.headers)
+        for row in table.rows:
+            writer.writerow(["" if item is None else item for item in row])
+        writer.writerow([])
+    return buffer.getvalue()
+
+
+#: xlsx 的 sheet 名有 31 字符上限，且不能含 `[]:*?/\`。
+SHEET_NAME_LIMIT = 31
+
+
+def sheet_name(title: str) -> str:
+    """把表标题转成合法的 Excel sheet 名。
+
+    去掉了 `#` 与非法字符；`TABLE_*` 常量里的 `·` 是合法字符，保留可读性。
+    """
+    cleaned = str(title).replace("#", "").strip()
+    for char in "[]:*?/\\":
+        cleaned = cleaned.replace(char, "")
+    return cleaned[:SHEET_NAME_LIMIT] or "Sheet"
+
+
+def build_stats_xlsx(payload: dict[str, Any]) -> bytes | None:
+    """拼成**多 sheet xlsx** 字节；没有 openpyxl 时返回 None。
+
+    为什么值得单独做：CSV 的"多张表"只是竖向堆叠的文字，
+    在 Excel 里没法按 sheet 单独看、也没法直接做数据透视 ——
+    而"每时段弹幕量"恰恰是最想做透视的那张表。
+
+    **不引入硬依赖**：openpyxl 不在时返回 None，调用方回退 CSV。
+    导出这个功能不能因为缺一个可选依赖就整个不可用。
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        return None
+
+    workbook = Workbook()
+    # `Workbook()` 自带一个空表：第一张表复用它，其余用 create_sheet，
+    # 免得最后还要删掉那个多余的 "Sheet"。
+    workbook.remove(workbook.active)
+
+    bold = Font(bold=True)
+    for table in build_stats_tables(payload):
+        sheet = workbook.create_sheet(title=sheet_name(table.title))
+        sheet.append(list(table.headers))
+        for cell in sheet[1]:
+            cell.font = bold  # 列头加粗：表格里"哪一行是表头"应该一眼看出来
+        for row in table.rows:
+            sheet.append(["" if item is None else item for item in row])
+        # 冻结首行 + 按内容估个列宽：数字列（条数/uid）不会被挤成 `####`
+        sheet.freeze_panes = "A2"
+        for index, header in enumerate(table.headers, start=1):
+            longest = len(str(header))
+            for row in table.rows[:200]:  # 只看前 200 行估宽，几万行不必全量扫
+                if index <= len(row):
+                    longest = max(longest, len(str(row[index - 1])))
+            sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = min(
+                max(longest + 2, 8), 42
+            )
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
     return buffer.getvalue()

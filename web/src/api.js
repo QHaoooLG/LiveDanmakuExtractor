@@ -82,13 +82,14 @@ export const api = {
   annotationExportUrl: (params = {}) => `/api/annotations/export?${query(params)}`,
   exportUrl: (params = {}) => `/api/export?${query(params)}`,
   /**
-   * **统计 CSV**：弹幕统计 + 每时段弹幕量，同一个文件里多张表。
+   * **统计数据**：概要 / 类型分布 / 每时段弹幕量 / 发言 TOP。
    *
    * 与 `exportUrl`（原始事件逐条流式下载）是两件事，两个都保留：
    * 前者回答"这段时间发生了什么"，后者是"把原始数据给我"。
    *
    * 这里走 JSON 而不是直接 `window.location.href` —— 因为文件名的
-   * "当天导出编号"只有前端能维护，必须由前端另存（见 `preferences.js`）。
+   * "当天导出编号"只有前端能维护，必须由前端另存（见 `preferences.js`）；
+   * 也正因为走 JSON，xlsx 只能 base64 塞进字段里（`format: 'xlsx'`）。
    */
   statsExport: (params = {}) => request(`/api/stats/export?${query(params)}`),
   /**

@@ -31,7 +31,7 @@ const props = defineProps({
   keywordMode: { type: String, default: 'highlight' },
   scThreshold: { type: Number, default: 30 },
   busy: { type: Boolean, default: false },
-  /** 正在导出统计 CSV（导出要走一次 fetch，期间把按钮置灰防连点） */
+  /** 正在导出统计数据（导出要走一次 fetch，期间把按钮置灰防连点） */
   exportingStats: { type: Boolean, default: false },
 })
 
@@ -125,12 +125,13 @@ function confirmStop() {
       导出 CSV
     </button>
 
-    <!-- 统计 CSV：与上面的"原始事件导出"是两件事 ——
-         这个出的是**聚合报告**（概要 / 类型分布 / 每时段弹幕量 / 发言 TOP，
-         同一个文件里多张表），时段长度跟随时间轴当前选择，默认 5 分钟。
+    <!-- 统计数据导出：与上面的"原始事件导出"是两件事 ——
+         这个出的是**聚合报告**（概要 / 类型分布 / 每时段弹幕量 / 发言 TOP），
+         优先给 xlsx（一张表一个 sheet），后端没装 openpyxl 时静默退回 CSV；
+         时段长度跟随时间轴当前选择，默认 5 分钟。
          文件名带主播名与当天导出编号，所以由前端另存（见 App.vue::exportStats）。 -->
     <button
-      title="导出统计 CSV：弹幕统计 + 每时段弹幕量（同一文件多张表；时段长度跟随时间轴）"
+      title="导出统计数据：概要 / 类型分布 / 每时段弹幕量 / 发言 TOP（优先 xlsx，多张表分 sheet；时段长度跟随时间轴）"
       :disabled="exportingStats"
       @click="emit('export-stats')"
     >

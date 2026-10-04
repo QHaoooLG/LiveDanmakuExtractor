@@ -1097,6 +1097,21 @@ exe **没有 stderr**（`sys.stderr is None`）⇒ 日志**全部丢弃**。托�
 > 📌 **两个导出不是替代关系**：`/api/export` = "把原始数据给我"（流式，数据量大）；
 > `/api/stats/export` = "这段时间发生了什么"（聚合报告）。
 
+#### 5.13.13b 导出升级：CSV → **多 sheet xlsx**（优化项 ④）
+
+**需求**：优化统计导出，允许引入新依赖（已确认可接受）。
+
+| 部分 | 落点 | 说明 |
+|------|------|------|
+| 表格定义 | `export_stats.StatsTable` + `build_stats_tables()` | CSV 与 xlsx **共用同一份表定义**（表名/表头/行）。分头写两份是这类功能的经典腐烂点：改一处忘另一处，两个导出慢慢就不一致了 |
+| xlsx 组装 | `export_stats.build_stats_xlsx()` | 每张表一个 sheet，**表名截断到 31 字符**（Excel 硬限制，`SHEET_NAME_LIMIT`）；首行加粗、`freeze_panes="A2"` 冻结表头。**没装 openpyxl 返回 `None`**，调用方回退 CSV |
+| 端点 | `GET /api/stats/export?format=xlsx` | 枚举参数（打错给 422）。xlsx 是二进制而这里必须回 JSON（文件名归前端），所以 **base64** 塞进 `xlsx` 字段 |
+| 降级 | 同一次请求**照旧回 `csv`** | ① 前端拿不到 xlsx 时不用再请求一次；② openpyxl 缺失只让 `xlsx` 为 `None`，**不会让整个导出 409** —— 导出是用户明确点出来的动作，不该因为少个可选依赖就失败 |
+| 前端 | `App.vue::exportStats()` | 固定带 `format=xlsx`；看 `payload.xlsx` 有没有值决定存 `.xlsx` 还是退回 `.csv`（**静默**，不打扰用户） |
+| ⚠️ 坑 | `base64ToBytes()` | `Uint8Array.from(atob(s))` 是**错的**（按字符码点截断，>0x7F 的字节全毁，而 xlsx 是 zip 必然坏）；必须逐字符 `charCodeAt` |
+| ⚠️ 坑 | `saveBinary()` 与 `saveBlob()` 分开 | xlsx **不能**加 BOM（前两字节得是 zip 魔数 `PK`）。测试就断言这个 |
+| 打包 | `tools/build_exe.py` | **openpyxl 不能排除**（`EXCLUDES` 里没有它）。排掉的话 exe 里统计导出就只剩 CSV 了 —— 这类"只在冻结版才失效"的功能最容易漏测 |
+
 #### 5.13.14 图标更换（exe + 托盘）
 
 **需求方指定**：源图换成 `pics/B站弹幕提取姬_团子形象2.png`（1060×1034，RGBA，四角全透明）。

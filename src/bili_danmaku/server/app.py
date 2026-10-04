@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import socket
@@ -602,8 +603,13 @@ def create_app(
             None, ge=1, le=86400,
             description="每时段弹幕量的格宽（秒）；缺省 5 分钟（需求约定的默认档）",
         ),
+        format: str = Query(
+            "csv",
+            pattern="^(csv|xlsx)$",
+            description="导出格式；`csv` 默认，`xlsx` 需装了 openpyxl",
+        ),
     ) -> dict[str, Any]:
-        """导出**统计 CSV**：弹幕统计 + 每时段弹幕量，**同一个文件多张表**。
+        """导出**统计数据**：弹幕统计 + 每时段弹幕量，**同一个文件多张表**。
 
         与 `/api/export` 的区别（两者都保留，用途不同）：
 
@@ -620,8 +626,12 @@ def create_app(
 
         内容里保持**不带 BOM**，由前端加 —— 这样这个端点在调试时（curl / 测试）
         读到的就是干净的 UTF-8 文本。
+
+        `format=xlsx` 时多回一个 `xlsx` 字段（**base64**，因为 JSON 塞不下二进制），
+        同时**仍然回 `csv`**：这样前端下载失败或用户其实想要文本时不用再请求一次，
+        而"openpyxl 没装"也只影响 `xlsx` 字段（`None`），不会让整个导出 409。
         """
-        from ..export_stats import DEFAULT_BUCKET_S, build_stats_csv
+        from ..export_stats import DEFAULT_BUCKET_S, build_stats_csv, build_stats_xlsx
 
         opened = _open_store_or_409(config)
         try:
@@ -670,7 +680,17 @@ def create_app(
         finally:
             opened.close()
 
-        return {"filename_hint": "", "csv": build_stats_csv(payload), **payload}
+        result: dict[str, Any] = {
+            "filename_hint": "",
+            "format": format,
+            "csv": build_stats_csv(payload),
+            **payload,
+        }
+        if format == "xlsx":
+            book = build_stats_xlsx(payload)
+            # `None` = 这台机器没装 openpyxl。不报错，让前端退回 CSV。
+            result["xlsx"] = base64.b64encode(book).decode("ascii") if book else None
+        return result
 
     # ------------------------------------------------------------------ #
     # 标注（V3-a2）：标记 / 笔记 / 按标记区间导出

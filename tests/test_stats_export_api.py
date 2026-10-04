@@ -162,3 +162,78 @@ def test_stats_export_requires_sqlite(tmp_path: Path) -> None:
     panel = PanelService(config, credentials=None, hub=hub)
     client = TestClient(create_app(config, None, hub, panel))
     assert client.get("/api/stats/export").status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# /api/stats/export?format=xlsx
+# --------------------------------------------------------------------------- #
+
+def test_stats_export_defaults_to_csv_without_xlsx_field(client: TestClient) -> None:
+    """不传 `format` 就是老行为：只有 `csv`，**不**顺带算一遍 xlsx。
+
+    老调用方（curl / 脚本 / 旧前端）不该因为这次改动多付一份 openpyxl 的
+    开销，也不该看到一个新字段。
+    """
+    payload = client.get("/api/stats/export").json()
+    assert payload["format"] == "csv"
+    assert "xlsx" not in payload
+
+
+def test_stats_export_xlsx_is_a_real_workbook(client: TestClient) -> None:
+    """`format=xlsx` 回的 base64 必须解得出**多张表**的 xlsx。
+
+    这里只解到 zip 层查表名：`export_stats.build_stats_xlsx` 的形状在
+    `test_export_stats.py` 里已单独测过，端点层的职责是"别把它弄坏"
+    （编码/字段/降级），所以只验到"是个能打开的 xlsx、四张表还在"。
+
+    表名读 `xl/workbook.xml` 而不是 sharedStrings：openpyxl 写表名用的是
+    `name` 属性（内联），而 sharedStrings 部件**可能整个不存在**。
+    """
+    pytest.importorskip("openpyxl")
+    import base64
+    import io
+    import zipfile
+    from xml.etree import ElementTree
+
+    payload = client.get("/api/stats/export?format=xlsx").json()
+    assert payload["format"] == "xlsx"
+    assert payload["xlsx"], "装了 openpyxl 就该给出 xlsx"
+    # 同一次请求里 CSV 仍然在：前端下载失败/用户其实想要文本时不用再请求一次
+    assert payload["csv"]
+
+    raw = base64.b64decode(payload["xlsx"])
+    assert raw[:2] == b"PK", "xlsx 是 zip，必须是 PK 开头（说明没被当文本处理）"
+
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(raw)) as book:
+        root = ElementTree.fromstring(book.read("xl/workbook.xml"))
+    names = [node.get("name") for node in root.iter(f"{ns}sheet")]
+    assert names == [
+        "弹幕统计 · 概要",
+        "弹幕统计 · 类型分布",
+        "每时段弹幕量统计",
+        "弹幕统计 · 发言 TOP",
+    ]
+
+
+def test_stats_export_xlsx_degrades_to_csv_without_openpyxl(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没装 openpyxl 时**不报错**：`xlsx` 为 None，`csv` 照旧。
+
+    导出是用户明确点出来的动作，不该因为少个可选依赖就整个失败
+    （见 `App.vue::exportStats` 的静默退回）。
+    """
+    import bili_danmaku.export_stats as export_stats
+
+    monkeypatch.setattr(export_stats, "build_stats_xlsx", lambda payload: None)
+    response = client.get("/api/stats/export?format=xlsx")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["xlsx"] is None
+    assert payload["csv"]
+
+
+def test_stats_export_rejects_unknown_format(client: TestClient) -> None:
+    """格式是枚举，不是自由文本 —— 打错要 422 而不是悄悄给 CSV。"""
+    assert client.get("/api/stats/export?format=pdf").status_code == 422

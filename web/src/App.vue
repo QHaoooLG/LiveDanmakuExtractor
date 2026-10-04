@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from './api.js'
+import { base64ToBytes } from './base64.js'
 import { useHistory } from './composables/useHistory.js'
 import { useLiveStream } from './composables/useLiveStream.js'
 import { TYPE_ORDER, typeLabel } from './format.js'
@@ -49,7 +50,7 @@ const scThreshold = ref(loadNumber(SC_THRESHOLD_KEY, DEFAULT_SC_THRESHOLD))
  */
 const anonymizeName = ref(loadAnonymizeName(localStorage))
 watch(anonymizeName, (value) => saveAnonymizeName(localStorage, value))
-/** 正在导出统计 CSV（按钮置灰防连点） */
+/** 正在导出统计数据（按钮置灰防连点） */
 const exportingStats = ref(false)
 const stats = ref(null)
 const health = ref(null)
@@ -317,7 +318,7 @@ function exportData(format) {
 }
 
 /**
- * 导出**统计 CSV**（弹幕统计 + 每时段弹幕量，同一个文件里多张表）。
+ * 导出**统计数据**（弹幕统计 + 每时段弹幕量，同一个文件里多张表）。
  *
  * 与 `exportData()` 的分工：
  *   * `exportData()` = 原始事件逐条，走 `window.location.href` 流式下载
@@ -328,11 +329,16 @@ function exportData(format) {
  *
  * 时段长度跟随时间轴当前选择（`history.bucketS`）；没选过就是 null，
  * 此时**不传** `bucket_s`，由后端按需求约定默认 5 分钟。
+ *
+ * 优先要 **xlsx**：同一次请求里后端会连 CSV 一起回（见 `server/app.py` 的
+ * `format=xlsx` 说明）。要 xlsx 只是为了"一张表一个 sheet"更好读，
+ * 所以后端没装 openpyxl（`xlsx` 为 `null`）时**静默退回 CSV** ——
+ * 导出是用户明确点出来的动作，不该因为少个可选依赖就失败。
  */
 async function exportStats() {
   if (exportingStats.value) return
   exportingStats.value = true
-  const params = { room_id: roomId.value ?? undefined }
+  const params = { room_id: roomId.value ?? undefined, format: 'xlsx' }
   if (enabledTypes.value.length && enabledTypes.value.length < TYPE_ORDER.length) {
     params.type = enabledTypes.value.join(',')
   }
@@ -347,14 +353,20 @@ async function exportStats() {
 
   try {
     const payload = await api.statsExport(params)
+    const useXlsx = Boolean(payload.xlsx)
     const { day, seq } = nextExportSeq(localStorage)
     const filename = buildExportFilename({
       anchorName: payload.anchor_name || roomInfo.value?.anchor_name,
       roomId: payload.room_id ?? roomId.value,
       day,
       seq,
+      ext: useXlsx ? 'xlsx' : 'csv',
     })
-    saveBlob(filename, payload.csv ?? '', 'text/csv;charset=utf-8')
+    if (useXlsx) {
+      saveBinary(filename, base64ToBytes(payload.xlsx), XLSX_MIME)
+    } else {
+      saveBlob(filename, payload.csv ?? '', 'text/csv;charset=utf-8')
+    }
     showToast(`已导出 ${filename}`)
   } catch (error) {
     showToast(`导出统计失败：${error.message}`)
@@ -362,6 +374,13 @@ async function exportStats() {
     exportingStats.value = false
   }
 }
+
+/**
+ * base64 → 字节数组。
+ *
+ * 实现在 `./base64.js`（**能单独测**，见 `web/test/base64.test.mjs`）——
+ * 这段转换写错会静默产出打不开的 xlsx，是最该有测试的一块。
+ */
 
 /**
  * 把文本存成文件。
@@ -380,6 +399,22 @@ function saveBlob(filename, text, mime) {
   link.click()
   link.remove()
   // 立刻回收：Object URL 不释放会一直占着这份 Blob 的内存
+  URL.revokeObjectURL(url)
+}
+
+/** xlsx 的 MIME。和 CSV 不同：它**不能**加 BOM（前 4 字节是 zip 魔数）。 */
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+/** 存二进制内容（xlsx）。与 `saveBlob` 的唯一区别是**不加 BOM**。 */
+function saveBinary(filename, bytes, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
   URL.revokeObjectURL(url)
 }
 

@@ -28,8 +28,8 @@
 | V3-a/a2/a3 | 历史浏览（游标分页）、标记/区间导出、链接解析与交互修正 | HANDOVER §5.8–5.10 |
 | V3-b 3A | **本地感知分析**（词频/热点/刷屏/账号画像） | HANDOVER §5.11 |
 
-**当前基线**：`pytest` **892 passed, 2 deselected**，覆盖率 **90.69%**（门禁 85%）；
-前端 `cd web; npm test` **37 passed**。
+**当前基线**：`pytest` **896 passed, 2 deselected**，覆盖率 **90.73%**（门禁 85%）；
+前端 `cd web; npm test` **42 passed**。
 
 > 📌 **本项目已有 git**（`main` 分支）。每个功能一个提交，提交信息用
 > `tools/commit.py`（PowerShell 5 没有 `<<<`，中文提交信息会被截断/乱码）：
@@ -491,10 +491,10 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m pip --version      # 期望 26.x（22.3.1 就会出 SSL 怪错）
 .\.venv\Scripts\python.exe -m pip download six --no-deps -d build\pipprobe
 
-# 1) 测试 + 覆盖率（期望：892 passed, 2 deselected，覆盖率 ~90.7%）
+# 1) 测试 + 覆盖率（期望：896 passed, 2 deselected，覆盖率 ~90.7%）
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term
 
-# 2) 前端逻辑用例（期望 19 passed；--test-isolation=none 是必需的，见 §7.4）
+# 2) 前端逻辑用例（期望 42 passed；--test-isolation=none 是必需的，见 §7.4）
 cd web; npm test; cd ..
 
 # 3) 确认前端产物是新的（当前应为 index-DYqGL4mp.js / index-CM2dI2GD.css）

@@ -112,6 +112,45 @@ try:
         check("指定房间后 room_id 原样保留", int(p.get("room_id") or 0) == int(room))
         types_in = set((p.get("by_type") or {}).keys())
         check("指定房间的数据非空", bool(p.get("by_type")), f"类型 {sorted(types_in)}")
+
+    print()
+    print("=" * 84)
+    print("6. format=xlsx：base64 → 落盘 → 用 openpyxl 真的打开它")
+    print("=" * 84)
+    # 刻意**不**只在内存里解 base64 了事：要写成一个真文件再让 openpyxl 打开，
+    # 这样"前两字节被当文本处理坏掉""zip 结构不完整"这类问题才会暴露。
+    xp = get("/api/stats/export?format=xlsx")
+    check("format 回显 xlsx", xp.get("format") == "xlsx", f"实际 {xp.get('format')}")
+    check("同一次请求仍带 csv（降级用）", bool(xp.get("csv")), f"{len(xp.get('csv') or '')} 字符")
+    b64 = xp.get("xlsx")
+    if b64:
+        import base64
+        import tempfile
+
+        raw = base64.b64decode(b64)
+        check("解出来是 zip（PK 魔数，说明没被加 BOM）", raw[:2] == b"PK",
+              f"前两字节 {raw[:2]!r}，{len(raw)} 字节")
+        try:
+            import openpyxl
+        except ImportError:
+            check("openpyxl 可用", False, "没装，无法打开验证")
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                book_file = Path(tmp) / "stats.xlsx"
+                book_file.write_bytes(raw)
+                book = openpyxl.load_workbook(book_file)
+                names = list(book.sheetnames)
+                print(f"    sheet: {names}")
+                check("四张表都在", names == [
+                    "弹幕统计 · 概要", "弹幕统计 · 类型分布", "每时段弹幕量统计", "弹幕统计 · 发言 TOP",
+                ], f"{len(names)} 张")
+                check("表名都在 Excel 的 31 字符上限内", all(len(n) <= 31 for n in names))
+                sheet = book[names[0]]
+                check("表头加粗", bool(sheet["A1"].font.bold), f"A1={sheet['A1'].value!r}")
+                check("表头冻结", sheet.freeze_panes == "A2", f"freeze_panes={sheet.freeze_panes!r}")
+                book.close()
+    else:
+        check("装了 openpyxl 就该给出 xlsx", False, "xlsx 为 null（这台机器缺 openpyxl？）")
 finally:
     controller.stop()
 

@@ -11,6 +11,8 @@
    （见 `find_dist()` 的冻结分支说明）。
 3. **词云重型依赖显式排除**（matplotlib/numpy/wordcloud/jieba）：只有 CLI
    `wordcloud --format png` 需要它们，托盘/面板都不需要；不排除体积会翻几倍。
+   **openpyxl 不排除** —— 统计数据导出的多 sheet xlsx 靠它（见
+   `export_stats.build_stats_xlsx`），排掉的话 exe 里就只剩 CSV 了。
 4. **打包后必须跑一次 `verify`**：确认前端被真的打进去、且**不是降级页**。
    这一步是 `--onefile` 唯一的"能不能用"判据，不要只看退出码。
 
