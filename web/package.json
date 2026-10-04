@@ -1,0 +1,20 @@
+{
+  "name": "bili-danmaku-panel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "bili-danmaku Web 面板前端（Vite + Vue 3）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test --test-isolation=none test/history.test.mjs"
+  },
+  "dependencies": {
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "vite": "^8.3.0"
+  }
+}

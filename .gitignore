@@ -1,0 +1,78 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ---- 凭据（绝不入库）----
+.secrets/
+.env
+cookies*.txt
+cookies*.json
+
+# ---- 运行期产物 ----
+data/
+data_*/          # 验证用的一次性输出目录（如 data_filtered / data_panel）
+out_*/           # export / replay 的输出目录
+*.jsonl
+*.csv
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 前端依赖与构建 ----
+# 注意写 `**/`：`web/.npmrc` 把 npm 缓存指到了**相对路径** `.npm-cache`，
+# 而 npm 是从 `web/` 起跑的 ⇒ 实际落在 `web/.npm-cache`。
+# 只写根级 `.npm-cache/` 会漏掉它（实测漏了 268 个文件）。
+**/.npm-cache/
+web/node_modules/
+
+# ---- 保留测试夹具（显式豁免上面的数据文件规则）----
+!tests/fixtures/**
+!tests/fixtures/*.json
+!tests/fixtures/*.jsonl
+!tests/fixtures/packets/**
+
+# ---- 前端构建产物 ----
+web/node_modules/
+web/dist/
+
+# ---- 离线安装的 wheel 缓存（本机 pip 网络不可用时的产物）----
+wheels/
+.pipcheck/
+
+# ---- 覆盖率产物（M4）----
+.coverage
+.coverage.*
+htmlcov/
+
+# ---- 打包暂存（tools/build_wheel.py 构建期间临时存在，构建完自动清理）----
+src/bili_danmaku/web_dist/
+
+# ---- exe 产物（tools/build_exe.py）----
+# dist/ 与 build/ 已在上面整体忽略，这里只做说明：
+#   dist/exe/B站弹幕提取姬.exe   打包产物
+#   build/exe_staging/           前端暂存 + 生成的入口脚本
+# 注意：assets/app.ico **要入库**（由 tools/make_icon.py 生成，
+# 打包时直接用它作为 exe 图标；入库可避免"打包依赖 Pillow"）。
+
+# ---- 词云/PNG 的临时产物（V2）----
+data_wc/
+data_stress/
+# matplotlib 字体缓存：默认写用户目录，受限沙箱会 Permission denied，故重定向到工作区内
+.matplotlib-cache/
+
+# ---- 面板托管运行期状态（pid / 端口 / 日志；V2-c）----
+.runtime/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

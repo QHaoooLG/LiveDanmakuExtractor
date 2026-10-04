@@ -1,0 +1,209 @@
+/* 深色主题：面板通常在 OBS / 直播场景旁边长时间开着，避免刺眼。 */
+
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --panel-2: #22262e;
+  --border: #2c313a;
+  --text: #e6e6e6;
+  --muted: #8b93a1;
+  --accent: #7dd3fc;
+  --danmaku: #e6e6e6;
+  --gift: #fbbf24;
+  --superchat: #f472b6;
+  --guard: #a78bfa;
+  --interact: #64748b;
+  --like: #34d399;
+  --system: #94a3b8;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+input[type='text'], input[type='number'] {
+  font: inherit;
+  color: inherit;
+  background: #0f1115;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  min-width: 0;
+}
+input:focus { outline: none; border-color: var(--accent); }
+
+.app {
+  display: grid;
+  /* 行：顶栏 / 上下文条 / SC 横幅 / 主体（横幅为空时不占高度） */
+  grid-template-rows: auto auto auto 1fr;
+  height: 100%;
+}
+
+/* ---------- 顶栏 ---------- */
+.room-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.brand { font-weight: 600; letter-spacing: 0.02em; }
+.brand small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.on { background: var(--like); box-shadow: 0 0 6px var(--like); }
+.dot.off { background: #ef4444; }
+.dot.wait { background: var(--gift); }
+
+.tag {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.tag.accent { color: var(--accent); border-color: #1e4d63; }
+.spacer { flex: 1; }
+
+/* ---------- 过滤栏 ---------- */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.chip {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+}
+.chip.active { color: var(--bg); font-weight: 600; }
+
+/* ---------- 主体 ---------- */
+.body { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+
+/* 左列：弹幕流（可伸缩）+ 底部时间轴（固定）。
+   用 grid 行而不是 flex，是因为需要"流占满剩余高度、时间轴按内容高"
+   且两者都参与 `min-height: 0` 的收缩规则（否则滚动容器不会出现滚动条）。 */
+.stream-column {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.stream {
+  position: relative;
+  overflow-y: auto;
+  padding: 8px 14px 40px;
+  scroll-behavior: auto;
+  min-height: 0;
+}
+.stream-line {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  line-height: 1.5;
+  align-items: baseline;
+}
+.stream-line:hover { background: #1a1d23; }
+.stream-line .time { color: #5b6472; font-size: 12px; font-variant-numeric: tabular-nums; }
+.stream-line .name { color: #9ecbf5; flex-shrink: 0; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-line .name.masked { color: #6b7280; font-style: italic; }
+.stream-line .text { word-break: break-word; }
+/* 弹幕表情：占位符 [dog] 渲染成内联图片，高度与文字行高对齐 */
+.stream-line .text .emot {
+  height: 22px; width: auto; vertical-align: -5px;
+  margin: 0 1px; image-rendering: auto;
+}
+.stream-line .medal {
+  font-size: 11px; border: 1px solid #3d4b5c; border-radius: 3px;
+  padding: 0 4px; color: #a8c0d8; flex-shrink: 0;
+}
+.stream-line mark { background: #4a3a12; color: var(--gift); padding: 0 2px; border-radius: 2px; }
+
+.type-danmaku .text { color: var(--danmaku); }
+.type-gift { background: #2a2413; border-left: 3px solid var(--gift); }
+.type-gift .text { color: var(--gift); font-weight: 600; }
+.type-super_chat { background: #2c1723; border-left: 3px solid var(--superchat); }
+.type-super_chat .text { color: var(--superchat); font-weight: 600; }
+.type-guard_buy { background: #241c33; border-left: 3px solid var(--guard); }
+.type-guard_buy .text { color: var(--guard); font-weight: 600; }
+.type-interact .name { color: #7c8899; }
+.type-interact .text { color: var(--interact); font-size: 13px; }
+.type-like .text { color: var(--like); font-size: 13px; }
+.type-room_stats .text, .type-notice .text { color: var(--system); font-size: 13px; }
+.type-other { opacity: 0.75; }
+
+.jump {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--accent); color: #08222c; font-weight: 600;
+  border: none; padding: 6px 16px; border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.empty { color: var(--muted); text-align: center; padding: 60px 20px; line-height: 2; }
+
+/* ---------- 侧栏 ---------- */
+.side {
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 12px 14px 30px;
+}
+.side h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin: 16px 0 8px; font-weight: 600;
+}
+.side h3:first-child { margin-top: 0; }
+/* 右侧栏的"房间"块与"统计"块之间给一道分隔线，两个信息域不粘连 */
+.side-stats { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 2px; }
+.kv { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+.kv span:first-child { color: var(--muted); }
+.kv span:last-child { font-variant-numeric: tabular-nums; }
+.bars { display: flex; flex-direction: column; gap: 5px; }
+.bar-row { display: grid; grid-template-columns: 78px 1fr 38px; gap: 7px; align-items: center; font-size: 12px; }
+.bar-track { background: #0f1115; border-radius: 3px; height: 7px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.rank { font-size: 12px; display: flex; justify-content: space-between; padding: 2px 0; gap: 8px; }
+.rank .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.rank .c { font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.room-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+}
+.room-item:hover { background: var(--panel-2); }
+.room-item.active { background: #1e3a4a; }
+.room-item .meta { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn { color: var(--gift); font-size: 12px; }

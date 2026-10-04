@@ -1,0 +1,149 @@
+[
+  {
+    "cmd": "DANMU_MSG",
+    "dm_v2": "",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789711092114,
+        -899632455,
+        0,
+        "eacf5753",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"中国移动你给我整好的呀，一出省卡的要死\",\"user_hash\":\"3939456851\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":7,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":null,\"is_audited\":false,\"id_str\":\"7c50088ba676d2945437453a7a6aacd23577\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i2.hdslb.com/bfs/face/fca0871d22cc4339f60bc35d6791fdc459a3e5ab.jpg",
+              "is_mystery": false,
+              "name": "我真吃不下LA",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i2.hdslb.com/bfs/face/fca0871d22cc4339f60bc35d6791fdc459a3e5ab.jpg",
+                "name": "我真吃不下LA"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": {
+              "color": 6126494,
+              "color_border": 6126494,
+              "color_end": 6126494,
+              "color_start": 6126494,
+              "guard_icon": "",
+              "guard_level": 0,
+              "honor_icon": "",
+              "id": 118494,
+              "is_light": 1,
+              "level": 5,
+              "name": "六式",
+              "ruid": 8431064,
+              "score": 40,
+              "typ": 0,
+              "user_receive_count": 0,
+              "v2_medal_color_border": "#5762A799",
+              "v2_medal_color_end": "#5762A799",
+              "v2_medal_color_level": "#5762A7E6",
+              "v2_medal_color_start": "#5762A799",
+              "v2_medal_color_text": "#FFFFFF"
+            },
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": 456245654,
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "中国移动你给我整好的呀，一出省卡的要死",
+      [
+        456245654,
+        "我真吃不下LA",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [
+        5,
+        "六式",
+        "六式zy",
+        804456,
+        6126494,
+        "",
+        0,
+        6126494,
+        6126494,
+        6126494,
+        0,
+        1,
+        8431064
+      ],
+      [
+        19,
+        0,
+        6406234,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "EDCBBA36",
+        "ts": 1789711092
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      429,
+      [
+        30
+      ],
+      null
+    ]
+  }
+]

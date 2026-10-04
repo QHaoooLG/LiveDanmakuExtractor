@@ -1,0 +1,516 @@
+[
+  {
+    "cmd": "DANMU_MSG",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789967659971,
+        -1095946815,
+        0,
+        "69b32a2c",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"三角洲跟朋友玩其实不赚钱[捂脸]\",\"user_hash\":\"1773349420\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":4,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[捂脸]\":{\"count\":1,\"descript\":\"[捂脸]\",\"emoji\":\"[捂脸]\",\"emoticon_id\":222,\"emoticon_unique\":\"emoji_222\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/e6073c6849f735ae6cb7af3a20ff7dcec962b4c5.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"172330e6b47e0bf04e1dec96ac6ab0bd1803\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i1.hdslb.com/bfs/face/2e8b5aedaae41a855132e9be3a03f55a1489d705.jpg",
+              "is_mystery": false,
+              "name": "无妄虚念",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i1.hdslb.com/bfs/face/2e8b5aedaae41a855132e9be3a03f55a1489d705.jpg",
+                "name": "无妄虚念"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": null,
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": 370452163,
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "三角洲跟朋友玩其实不赚钱[捂脸]",
+      [
+        370452163,
+        "无妄虚念",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [],
+      [
+        6,
+        0,
+        9868950,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "DED2845C",
+        "ts": 1789967659
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      39,
+      [
+        9
+      ],
+      null
+    ]
+  },
+  {
+    "cmd": "DANMU_MSG",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789967676537,
+        -1509121550,
+        0,
+        "a3d54f97",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"因为你香香软软的[dog]\",\"user_hash\":\"2748665751\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":9,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[dog]\":{\"count\":1,\"descript\":\"[dog]\",\"emoji\":\"[dog]\",\"emoticon_id\":208,\"emoticon_unique\":\"emoji_208\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"609f1e429eb0cff03a7faca2476ab0bd6993\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i0.hdslb.com/bfs/face/f7bff82ce347ec0107fa242149dea242f5fdbe02.jpg",
+              "is_mystery": false,
+              "name": "皙离",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i0.hdslb.com/bfs/face/f7bff82ce347ec0107fa242149dea242f5fdbe02.jpg",
+                "name": "皙离"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": null,
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": 90787284,
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "因为你香香软软的[dog]",
+      [
+        90787284,
+        "皙离",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [],
+      [
+        16,
+        0,
+        6406234,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "1205E87E",
+        "ts": 1789967676
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      117,
+      [
+        26
+      ],
+      null
+    ]
+  },
+  {
+    "cmd": "DANMU_MSG",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789967678849,
+        356166128,
+        0,
+        "e2ac581e",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"可能因为都喜欢看点小gay[dog]\",\"user_hash\":\"3802945566\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":8,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[dog]\":{\"count\":1,\"descript\":\"[dog]\",\"emoji\":\"[dog]\",\"emoticon_id\":208,\"emoticon_unique\":\"emoji_208\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"04ff415b230ffbde09da027e0f6ab0bd7515\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i0.hdslb.com/bfs/face/ca0372bcc19d35239fbb615da71abff88087a4b4.jpg",
+              "is_mystery": false,
+              "name": "祭之破魂",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i0.hdslb.com/bfs/face/ca0372bcc19d35239fbb615da71abff88087a4b4.jpg",
+                "name": "祭之破魂"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": {
+              "color": 13081892,
+              "color_border": 13081892,
+              "color_end": 13081892,
+              "color_start": 13081892,
+              "guard_icon": "",
+              "guard_level": 0,
+              "honor_icon": "",
+              "id": 118494,
+              "is_light": 1,
+              "level": 17,
+              "name": "六式",
+              "ruid": 8431064,
+              "score": 942,
+              "typ": 0,
+              "user_receive_count": 0,
+              "v2_medal_color_border": "#C770A499",
+              "v2_medal_color_end": "#C770A499",
+              "v2_medal_color_level": "#C770A4E6",
+              "v2_medal_color_start": "#C770A499",
+              "v2_medal_color_text": "#FFFFFF"
+            },
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": 40311276,
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "可能因为都喜欢看点小gay[dog]",
+      [
+        40311276,
+        "祭之破魂",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [
+        17,
+        "六式",
+        "六式zy",
+        804456,
+        13081892,
+        "",
+        0,
+        13081892,
+        13081892,
+        13081892,
+        0,
+        1,
+        8431064
+      ],
+      [
+        11,
+        0,
+        6406234,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "B177FA60",
+        "ts": 1789967678
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      390,
+      [
+        24
+      ],
+      null
+    ]
+  },
+  {
+    "cmd": "DANMU_MSG",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789967684974,
+        -1670356945,
+        0,
+        "adfa9938",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"我喜欢你[花]\",\"user_hash\":\"2918881592\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":6,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[花]\":{\"count\":1,\"descript\":\"[花]\",\"emoji\":\"[花]\",\"emoticon_id\":209,\"emoticon_unique\":\"emoji_209\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/7dd2ef03e13998575e4d8a803c6e12909f94e72b.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"4c0774e32208f6e21fad2dbb456ab0bd1019\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i0.hdslb.com/bfs/face/435a091882e7df170616b8331c0cbc53a8e73f27.jpg",
+              "is_mystery": false,
+              "name": "暖心狐妖",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i0.hdslb.com/bfs/face/435a091882e7df170616b8331c0cbc53a8e73f27.jpg",
+                "name": "暖心狐妖"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": {
+              "color": 6067854,
+              "color_border": 12632256,
+              "color_end": 12632256,
+              "color_start": 12632256,
+              "guard_icon": "",
+              "guard_level": 0,
+              "honor_icon": "",
+              "id": 118494,
+              "is_light": 0,
+              "level": 3,
+              "name": "六式",
+              "ruid": 8431064,
+              "score": 9,
+              "typ": 0,
+              "user_receive_count": 0,
+              "v2_medal_color_border": "#919298CC",
+              "v2_medal_color_end": "#919298CC",
+              "v2_medal_color_level": "#919298E6",
+              "v2_medal_color_start": "#919298CC",
+              "v2_medal_color_text": "#FFFFFF"
+            },
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": 358306869,
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "我喜欢你[花]",
+      [
+        358306869,
+        "暖心狐妖",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [
+        3,
+        "六式",
+        "六式zy",
+        804456,
+        6067854,
+        "",
+        0,
+        12632256,
+        12632256,
+        12632256,
+        0,
+        0,
+        8431064
+      ],
+      [
+        0,
+        0,
+        9868950,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "23912264",
+        "ts": 1789967684
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      65,
+      [
+        6
+      ],
+      null
+    ]
+  }
+]

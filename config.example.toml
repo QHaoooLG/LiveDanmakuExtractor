@@ -1,0 +1,75 @@
+# bili-danmaku 配置模板
+# 复制为 config.toml 后修改。优先级：CLI 参数 > 环境变量(BILI_*) > 本文件 > 内置默认值。
+
+[general]
+log_level = "INFO"
+max_rooms = 3
+# 脱敏输出：uid 加盐哈希、昵称掩码。默认 false。
+anonymize = false
+# 只采集「有用户文字内容」的弹幕与 SC（默认 true）。
+# 进房 / 上舰 / 点赞 / 礼物 / 房间数据等不产生用户文字的事件会被过滤掉，
+# 它们仍会被接收并计入统计的「过滤」计数，只是不落盘。
+# 置 false 会全部落盘，仅建议在协议调试时临时打开。
+content_only = true
+
+[api]
+# 凭据优先级：BILI_SESSDATA 环境变量 > cookie_file > 本字段。
+# 建议留空，改用 `bili-danmaku login` 扫码写入 cookie_file。
+cookie = ""
+cookie_file = ".secrets/cookies.json"
+request_timeout = 10.0
+# 两次 HTTP 调用的最小间隔（秒），防风控，不建议低于 1.0
+min_request_interval = 1.0
+# 登录态下是否优先尝试 getDanmuInfo（实测匿名会返回 -352）
+prefer_getdanmuinfo = true
+retry_max = 3
+
+[client]
+# 心跳间隔秒数，服务端 60 秒无心跳会强制断开，不要超过 30
+heartbeat_interval = 30.0
+# 超过该秒数未收到心跳回应则判定连接假死并重连
+heartbeat_timeout = 90.0
+# 单次 recv 等待秒数（低热度房间消息稀疏，不能按"无消息=掉线"判定）
+recv_timeout = 5.0
+reconnect_max_delay = 60.0
+# 声明协议版本。3=brotli，2=zlib。缺少 brotli 依赖时会自动降为 2。
+protover = 3
+
+[sinks]
+types = ["jsonl", "csv", "sqlite"]
+out_dir = "data"
+# 是否保留原始消息（体积约增大 2-3 倍，但协议漂移后可重新解析）
+keep_raw = true
+rotate_hours = 1
+batch_size = 200
+flush_interval = 1.0
+queue_size = 20000
+# SQLite 采集库路径；留空 = {out_dir}/danmaku.db
+sqlite_path = ""
+# 标注库（面板的标记/备注）路径；留空 = {out_dir}/annotations.db
+# 刻意与采集库分开：采集库会被归档/清理，而标注是人产生的，不该跟着走。
+# 想重置标注就删这一个文件，完全不必碰采集数据。
+annotations_path = ""
+
+[web]
+host = "127.0.0.1"
+# 端口被占用时会自动向后尝试，并在启动日志中打印实际 URL
+port = 8787
+# 绑定非回环地址时必须设置，否则拒绝启动
+token = ""
+
+[analysis]
+# 实时感知分析（面板右栏的词频 / 热点 / 刷屏 / 账号画像）。
+# 全部本地计算，**不会有任何数据离开本机**。
+# 词频榜排序口径：
+#   "users" = 按「多少人说过这个词」—— 默认。能把"一个人刷 20 遍"自动压下去；
+#   "count" = 按出现次数（旧行为）。
+rank_by = "users"
+# 停用词文件（一行一个，# 注释）。给了就**整份替换**内置停用词表。
+# 内置表刻意很短（只放真正的功能词/语气词），因为 `哈哈`/`主播` 这类恰恰是有效信号。
+# 想清掉自己不想要的词（如某些口头禅）就在这里加。
+stopwords_file = ""
+# 用户词典：提交给 jieba，防止专名被切碎（`军哥` → `军`+`哥`）。
+# 当前监控房间的**主播昵称会自动加入**，这里只需要补别的（如常驻嘉宾、游戏名）。
+# 注意：面板是按条增量分词的，所以词典在启动后再改只对**之后**进来的弹幕生效。
+custom_words = []
