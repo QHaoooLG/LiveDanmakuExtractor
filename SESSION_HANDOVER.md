@@ -28,7 +28,7 @@
 | V3-a/a2/a3 | 历史浏览（游标分页）、标记/区间导出、链接解析与交互修正 | HANDOVER §5.8–5.10 |
 | V3-b 3A | **本地感知分析**（词频/热点/刷屏/账号画像） | HANDOVER §5.11 |
 
-**当前基线**：`pytest` **900 passed, 2 deselected**，覆盖率 **90.80%**（门禁 85%）；
+**当前基线**：`pytest` **913 passed, 2 deselected**，覆盖率 **90.82%**（门禁 85%）；
 前端 `cd web; npm test` **101 passed**。
 
 > §13 交付物清单与 §14 自检表里的数字是 **V3-b 3A 那一轮的快照**（704 passed /
@@ -506,7 +506,7 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m pip --version      # 期望 26.x（22.3.1 就会出 SSL 怪错）
 .\.venv\Scripts\python.exe -m pip download six --no-deps -d build\pipprobe
 
-# 1) 测试 + 覆盖率（期望：900 passed, 2 deselected，覆盖率 ~90.8%）
+# 1) 测试 + 覆盖率（期望：913 passed, 2 deselected，覆盖率 ~90.8%）
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term
 
 # 2) 前端用例（期望 101 passed；--test-isolation=none 与 --import 都是必需的，见 §7.4）
@@ -529,6 +529,12 @@ Select-String -Path web\dist\index.html -Pattern "assets/index-"
 #   下面这个需要面板已在跑（例如 exe web --port 8795）+ 本机装有 Chrome/Edge：
 #   .\.venv\Scripts\python.exe tools\verify_canvas_pixels.py --port 8795
 #   它用 headless Chromium 读回**真像素** —— jsdom 只能证明"调了哪些绘制指令"。
+
+# 4b3) 扫码登录 / 二维码弹窗（**需要真实桌面 + 网络**）
+.\.venv\Scripts\python.exe tools\verify_login_banner.py         # 登录条四态 + 弹窗尺寸承诺 + 成功自动关窗
+#   下面这个会起托盘并**自动点一下「扫码登录」**，再用 EnumWindows 找那个窗口量尺寸：
+#   .\.venv\Scripts\python.exe tools\verify_qr_window_desktop.py
+#   （它先调 SetProcessDpiAwarenessContext，否则 GetClientRect 会被 DPI 虚拟化放大）
 
 # 4c) exe 打包 + 冻结自检（约 30s；必须看到 served_real_frontend: True）
 .\.venv\Scripts\python.exe tools\make_icon.py

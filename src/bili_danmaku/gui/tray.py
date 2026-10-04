@@ -231,6 +231,12 @@ class TrayApp:
     def _cleanup(self) -> None:
         """主循环退出后的收尾（幂等）。"""
         try:
+            # 二维码弹窗是独立顶层窗口，先自己关掉（并结束登录会话），
+            # 免得它带着一个还在轮询的 daemon 线程活过主循环
+            self.window.shutdown()
+        except Exception:  # pragma: no cover - 退出路径不该再抛
+            log.debug("退出时关闭二维码窗口失败", exc_info=True)
+        try:
             self.tray.hide()
         except Exception:  # pragma: no cover
             pass

@@ -223,6 +223,33 @@ def render_qr(url: str) -> bool:
         return False
 
 
+#: PNG 文件头里 IHDR 的固定布局：8 字节签名 + 4 字节块长 + 4 字节 `IHDR`，
+#: 接下来就是宽（4 字节，大端）与高（4 字节，大端）。
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_PNG_WIDTH_AT = 16
+_PNG_HEIGHT_AT = 20
+_PNG_HEADER_BYTES = 24
+
+
+def png_size(data: bytes | None) -> tuple[int, int] | None:
+    """从 PNG 字节里读出 `(宽, 高)`；不是 PNG 或太短就返回 None。
+
+    **只查文件头，不解码图片** —— 登录弹窗要用它来保证"窗口一定装得下二维码"，
+    而在窗口创建那一刻去解码图片是没必要的开销（也会多引一个依赖）。
+
+    为什么需要它：弹窗尺寸若靠 `pack` 自适应，在**高 DPI** 下会被 Tk 的缩放
+    放大到超出窗口，二维码就被裁掉一角 —— 而二维码**缺一个角就扫不出来**，
+    这正是这次要修的缺陷。所以尺寸必须能提前算出来。
+    """
+    if not data or len(data) < _PNG_HEADER_BYTES or not data.startswith(_PNG_MAGIC):
+        return None
+    width = int.from_bytes(data[_PNG_WIDTH_AT : _PNG_WIDTH_AT + 4], "big")
+    height = int.from_bytes(data[_PNG_HEIGHT_AT : _PNG_HEIGHT_AT + 4], "big")
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def render_qr_png(url: str, *, box_size: int = 8, border: int = 2) -> bytes | None:
     """把二维码渲染成 **PNG 字节**；失败返回 None。
 

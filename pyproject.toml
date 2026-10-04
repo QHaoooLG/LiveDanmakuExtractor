@@ -58,13 +58,16 @@ addopts = "-q -m 'not live'"
 # "把它算进百分比只会让『核心逻辑有没有被测到』变模糊"：
 #   * `cli.py` / `__main__.py` —— 命令编排与进程入口，行为由 tests/test_cli.py 的
 #     端到端用例保证；
-#   * `gui/_win32.py` / `gui/panel_window.py` / `gui/tray.py` —— GUI 展示层，
-#     tkinter 窗口与托盘菜单的**交互**在自动化环境里点不了（窗口会被抢占、
-#     菜单需要真人点击）。
+#   * `gui/_win32.py` / `gui/panel_window.py` / `gui/qr_window.py` / `gui/tray.py` ——
+#     GUI 展示层，tkinter 窗口与托盘菜单的**交互**在自动化环境里点不了
+#     （窗口会被抢占、菜单需要真人点击）。
 #
-# ⚠️ 排除 ≠ 不测。GUI 里**可测的部分仍在测量之外但有用例**（tests/test_gui.py 20 项）：
-#    菜单结构与置灰逻辑、状态文案、图标定位与加载、托盘消息窗口创建、CLI 接线；
-#    端到端另有 `tools/smoke_tray.py`（Tk 窗口 + 托盘图标 + 消息泵 + 退出路径）。
+# ⚠️ 排除 ≠ 不测。GUI 里**可测的部分仍在测量之外但有用例**（tests/test_gui.py 36 项）：
+#    菜单结构与置灰逻辑、状态文案、图标定位与加载、托盘消息窗口创建、CLI 接线、
+#    二维码弹窗的尺寸承诺与事件处理（`ok` 自动关窗、失败显示原因…）；
+#    端到端另有 `tools/smoke_tray.py`（Tk 窗口 + 托盘图标 + 消息泵 + 退出路径）、
+#    `tools/verify_login_banner.py`（真 Tk 窗口的登录条与二维码弹窗）、
+#    `tools/verify_qr_window_desktop.py`（真桌面上窗口真的出现且装得下整张码）。
 #    只有"像素与点击手感"真的靠手测，那部分才不计入覆盖率。
 # --------------------------------------------------------------------------- #
 [tool.coverage.run]
@@ -75,6 +78,7 @@ omit = [
     "src/bili_danmaku/__main__.py",
     "src/bili_danmaku/gui/_win32.py",
     "src/bili_danmaku/gui/panel_window.py",
+    "src/bili_danmaku/gui/qr_window.py",
     "src/bili_danmaku/gui/tray.py",
 ]
 

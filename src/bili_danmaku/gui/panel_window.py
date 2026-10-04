@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import queue
@@ -25,6 +24,7 @@ from typing import Any, Callable
 from .. import __version__
 from ..launcher import PanelController, PanelStatus
 from . import _win32
+from .qr_window import QrLoginWindow
 
 log = logging.getLogger("bili_danmaku.gui.panel")
 
@@ -131,6 +131,8 @@ class LauncherWindow:
         self._on_refresh: Callable[[PanelStatus], None] | None = None
         #: 当前登录会话（扫码登录用；None = 没在登录）
         self._login_session: Any = None
+        #: 二维码弹窗（登录中才有；见 `gui/qr_window.py`）
+        self._qr_window: Any = None
         self._logged_once = False
         self._login_checked_at = 0.0
         #: 上一次看到的"运行中"状态（用于只在起停时刷新存储占用）
@@ -138,8 +140,6 @@ class LauncherWindow:
         #: 后台线程（存储扫描 / 登录检查）的结果队列，**只由主线程消费**。
         #: 用队列而不是 `root.after`：tkinter 不是线程安全的（见 `refresh_storage`）。
         self._bg_results: "queue.Queue[tuple[str, Any]]" = queue.Queue()
-        #: tkinter 的 PhotoImage 必须留引用，否则会被 GC 掉、图片变空白
-        self._qr_photo: Any = None
 
         self._build()
 
@@ -202,6 +202,10 @@ class LauncherWindow:
         为什么要放在**最上面**（而不是塞进高级设置）：未登录会让弹幕里的昵称被
         平台打码成 `宅***`，用户会以为"程序坏了"。这个提示必须显眼、且要能一步修好。
 
+        **二维码本身不在这个面板里显示** —— 面板宽度固定，二维码会被裁掉，
+        而缺角的二维码扫不出来。点「扫码登录」会弹一个**独立窗口**专门显示它，
+        尺寸按图片真实大小算（见 `gui/qr_window.py` 的说明）。
+
         四种状态各有一套配色与按钮组合（见 `_apply_login_status`）：
         * `unknown` 灰：还没校验（或本地就没凭据）；
         * `ok` 绿：已登录，显示昵称；
@@ -230,8 +234,6 @@ class LauncherWindow:
         )
         self.login_hint.pack(side="left", padx=(8, 0))
 
-        # 二维码画布（登录时才 pack）
-        self.qr_canvas = tk.Label(box, bg="#ffffff", bd=0)
         self.login_box.pack(fill="x", pady=(10, 0))
 
     def _apply_login_status(self, status: Any, *, online: bool) -> None:
@@ -297,81 +299,89 @@ class LauncherWindow:
         self.check_login(online=True)
 
     # ------------------------------------------------------------------ #
-    # 扫码登录
+    # 扫码登录（二维码在**独立窗口**里显示，见 gui/qr_window.py）
     # ------------------------------------------------------------------ #
 
     def start_qr_login(self) -> None:
-        """开始扫码登录：后台申请二维码 + 轮询，主线程每 200ms 消费事件。
+        """开始扫码登录：起会话 + 弹独立二维码窗口。
 
         会话由 `controller.new_login_session()` 建（凭据文件跟随配置），
         这样"用哪个 cookies.json"只有一处决定 —— 否则 GUI 与面板会各算一遍。
+
+        窗口已经开着时**只把它提到前面**，不重开会话：重开会让手机上正在扫的
+        那张码立刻作废。
         """
+        if self._qr_window is not None and not self._qr_window.closed:
+            self._qr_window.win.deiconify()
+            self._qr_window.win.lift()
+            return
         if self._login_session is not None:
             return
+
         session = self.controller.new_login_session()
         if not session.start():
             return
         self._login_session = session
         self.login_btn.configure(state="disabled", text="登录中…")
-        self.login_hint.configure(text="正在申请二维码…")
-        self.qr_canvas.pack_forget()
-        self.root.after(200, self._poll_qr_login)
+        self.login_hint.configure(text="二维码已在新窗口打开，请在手机上扫码")
+        self._qr_window = QrLoginWindow(
+            self.root, session, on_closed=self._on_qr_window_closed
+        )
 
     def cancel_qr_login(self) -> None:
+        """取消登录（供面板/托盘调用；窗口自己关掉时走 `_on_qr_window_closed`）。"""
+        window = self._qr_window
+        if window is not None and not window.closed:
+            # `close()` 会回调 `_on_qr_window_closed`，清理只写一处
+            window.close()
+            return
+        self._teardown_qr_login()
+
+    def _on_qr_window_closed(self) -> None:
+        """二维码窗口关掉了（用户取消、或登录成功自己关的）。
+
+        结束原因从 `window.outcome` 读 —— 判断只在窗口那一处做，
+        面板不重复维护"成功了吗"的状态（两份状态一定会漂）。
+        """
+        window = self._qr_window
+        outcome = str(getattr(window, "outcome", "") or "")
+        self._teardown_qr_login()
+        try:
+            if outcome == "ok":
+                self.login_hint.configure(text="登录成功，凭据已保存")
+                # 重新联网校验一次：让提示条立刻变绿、显示新昵称
+                self.recheck_login()
+            elif outcome == "failed":
+                self.login_hint.configure(text="扫码登录失败，请重试")
+            else:
+                self.login_hint.configure(text="已取消扫码登录")
+        except tk.TclError:  # pragma: no cover - 面板已经销毁（正在退出）
+            pass
+
+    def shutdown(self) -> None:
+        """退出前收尾：关掉二维码窗口、结束登录会话（幂等）。
+
+        必须显式做：二维码窗口是**独立顶层窗口**，`root.destroy()` 不一定按
+        我们想要的顺序销毁它，而登录线程还在轮询；先自己关干净最稳。
+        """
+        window = self._qr_window
+        if window is not None and not window.closed:
+            # 先摘掉回调：退出路径上不需要再刷新面板（此时控件可能已销毁）
+            window.on_closed = None
+            window.close()
+        self._teardown_qr_login()
+
+    def _teardown_qr_login(self) -> None:
+        """把登录会话与窗口引用清干净，并把按钮恢复成可点。"""
         session = self._login_session
         if session is not None:
             session.cancel()
         self._login_session = None
-        self._qr_photo = None
-        self.qr_canvas.pack_forget()
-        self.login_btn.configure(state="normal", text="扫码登录")
-        self.login_hint.configure(text="")
-
-    def _poll_qr_login(self) -> None:
-        """消费扫码事件（**主线程**里跑，所以能安全碰 tkinter）。"""
-        session = self._login_session
-        if session is None:
-            return
-
-        event = session.poll()
-        if event is not None:
-            state = event.get("state")
-            if state == "qr" and session.qr_png:
-                self._show_qr(session.qr_png)
-                self.login_hint.configure(text="请用 B 站手机客户端扫码")
-            elif state == "waiting":
-                self.login_hint.configure(text=str(event.get("text") or "等待扫码…"))
-            elif state == "scanned":
-                self.login_hint.configure(text="已扫码，请在手机上确认")
-            elif state == "expired":
-                self.login_hint.configure(text="二维码已失效，正在换一张…")
-                self.qr_canvas.pack_forget()
-            elif state == "ok":
-                self.login_hint.configure(text=f"登录成功，凭据已保存")
-                self.cancel_qr_login()
-                self.check_login(online=True)
-                return
-            elif state in ("failed", "cancelled"):
-                detail = str(event.get("message") or "已取消")
-                self.login_hint.configure(text=detail)
-                self.cancel_qr_login()
-                return
-
-        if self._login_session is not None:
-            self.root.after(200, self._poll_qr_login)
-
-    def _show_qr(self, png_bytes: bytes) -> None:
-        """把二维码 PNG 显示在面板上（tkinter 原生只吃 GIF/PNG/BMP，正好）。"""
+        self._qr_window = None
         try:
-            import io
-
-            photo = tk.PhotoImage(data=base64.b64encode(png_bytes).decode("ascii"))
-        except Exception:  # noqa: BLE001 - 显示不了就退回"用链接打开"
-            self.login_hint.configure(text="二维码渲染失败，请点「重新检查」后重试")
-            return
-        self._qr_photo = photo  # 必须留引用
-        self.qr_canvas.configure(image=photo)
-        self.qr_canvas.pack(pady=(8, 0))
+            self.login_btn.configure(state="normal", text="扫码登录")
+        except tk.TclError:  # pragma: no cover - 窗口已销毁
+            pass
 
     def _build_status(self, parent: tk.Frame) -> None:
         box = tk.Frame(parent, bg=ENTRY_BG, padx=12, pady=10)

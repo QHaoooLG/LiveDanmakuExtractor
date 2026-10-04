@@ -1197,6 +1197,54 @@ exe **没有 stderr**（`sys.stderr is None`）⇒ 日志**全部丢弃**。托�
 **两类原因必须分开**（`local_credential_status` 的说明里也写了）：
 网络异常**不等于**凭据失效 —— 前者是 `warn`（黄色、说明是网络问题），后者才是 `alert`。
 
+#### 5.13.17b 二维码改为**独立弹窗**（**这一版修的是"扫不出来"**）
+
+**需求**："重新设计为点击登录验证后，单独弹出窗口来显示完整二维码来进行登录，
+获取到凭证后可以自动关闭二维码弹窗，要求二维码弹窗大小一定能完整显示二维码。"
+
+**为什么要改**（不是排版偏好，是功能坏了）：二维码原来塞在启动面板里
+（`resizable(False, False)`、宽度固定约 480px），而二维码是 `box_size=8` 渲染的，
+内容长一点就 400px 上下 —— 被裁掉一角。而**二维码缺一个角就扫不出来**，
+用户看到的只是"扫了没反应"。实测本机真二维码 **424px**、面板内容区装不下。
+
+| 部分 | 落点 | 说明 |
+|------|------|------|
+| 弹窗 | 🆕 `gui/qr_window.py::QrLoginWindow` | 独立 `Toplevel`：标题 + 白底二维码 + 状态行 + 「取消登录」；`-topmost` 且**居中** |
+| 尺寸 | `qr_window.QrLoginWindow._measure()` / `qr_area_px()`（**纯函数**） | 按 `winfo_reqwidth()`（已含 `tk scaling`）算出"控件 + 两侧留白 + 状态行/按钮行"，再 `geometry` + `minsize` 按下去 |
+| 图片尺寸 | 🆕 `credentials.png_size()`（**纯函数**） | 只查 PNG 文件头（IHDR）拿宽高，**不解码图片** —— 窗口创建那一刻不需要开销 |
+| 结束原因 | `QrLoginWindow.outcome`（`""`/`ok`/`cancelled`/`failed`） | 面板靠它区分"成功自动关"与"用户取消"。判断只在弹窗这一处做，面板不重复维护"成功了吗" |
+| 面板 | `panel_window.py::start_qr_login()` / `_on_qr_window_closed()` / `shutdown()` | 面板里**不再有**二维码画布；点按钮 → 开会话 + 弹窗；窗口关掉 → 恢复按钮 + 按 outcome 收尾 |
+
+**四条硬约束**（都踩过，改动前先读）：
+
+1. **不能设 `transient(master)`**。Tk 会把 transient 子窗口跟着主窗口一起隐藏 ——
+   而"关闭启动面板 = 最小化到托盘"是本程序常态，那一刻二维码正需要留在屏幕上
+   给手机扫，跟主窗口绑在一起正好帮倒忙。实测：主窗口 `withdraw()` 时 transient
+   的 Toplevel 停在 `state=withdrawn`、`winfo_width()==1`，**连 `deiconify()`
+   都拉不起来**（弹窗根本不出现）。
+2. **尺寸是算出来的，不是自适应出来的**。`pack` 自适应在高 DPI 下会算进 `tk scaling`，
+   可能小于放大后的图片；所以量完真实请求尺寸后直接 `geometry` + `minsize`。
+   本机实测：图片 424px → 窗口 585×585（Tk 单位），Windows 侧客户区 1000×1000（物理像素）。
+3. **读窗口尺寸前要先 `update()`**。Tk 的 `geometry()` 请求不刷新就落不到
+   `winfo_width()` 上，会读到默认的 `1x1` —— 看起来像"窗口只有 1 像素"（实测踩到）。
+4. **不要用非 DPI 感知的进程去量窗口尺寸**。`GetClientRect` 会被 Windows 按系统缩放
+   虚拟化放大（本机 `tk scaling` 1.3346，读数直接差一个缩放）。
+   `tools/verify_qr_window_desktop.py` 里先调 `SetProcessDpiAwarenessContext`。
+
+**验证**（三条互补，缺一条就盖不住这次的缺陷）：
+
+* `tests/test_gui.py` —— `png_size()`（含**真 PNG**，不是只拼字节）、
+  `qr_area_px()` 的"永远装得下"承诺与上限、以及弹窗事件处理
+  （`ok` 自动关并记 outcome、等待/已扫码**不**关、失败显示原因后关、
+  已成功后再取消**不能**覆盖结论）。弹窗用 `object.__new__` 造，
+  **不走 `__init__`**，所以无桌面也能测。
+* `tools/verify_login_banner.py` —— 真 Tk 窗口：弹出的是**独立窗口**、
+  面板里不再有画布、图片控件 ≥ 图片、窗口内容区 ≥ 控件 + 留白、
+  取消后按钮恢复且引用清干净、成功路径自动关窗并报告成功。
+* `tools/verify_qr_window_desktop.py` —— **真实桌面**：起托盘、自动点一下
+  「扫码登录」、用 `EnumWindows` 找到那个窗口并量客户区。
+  这一条是唯一能证明"窗口真的出现在屏幕上"的（前两条读的都是 Tk 自报的数字）。
+
 #### 5.13.18 存储位置：可选目录 + 占用显示
 
 **需求**："更新出用户可自选存储位置这一功能，该功能放到启动面板中；
@@ -1796,6 +1844,15 @@ python tools/stress.py --room 7878 --queue-size 3 --flush-interval 5   # 强制�
 
 # 覆盖率
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing
+
+# 界面/交互的专项验收（GUI 点不了，但"逻辑与尺寸"要能验）
+.\.venv\Scripts\python.exe tools\verify_login_banner.py          # 登录条四态 + 二维码弹窗尺寸 + 成功自动关窗
+.\.venv\Scripts\python.exe tools\verify_qr_window_desktop.py     # 真桌面：弹窗真的出现且装得下整张码
+.\.venv\Scripts\python.exe tools\verify_empty_rooms.py           # 空房间引导（真 Vue SSR）
+.\.venv\Scripts\python.exe tools\verify_timeline_canvas.py       # 时间轴 canvas：柱数/柱高/表头
+.\.venv\Scripts\python.exe tools\verify_canvas_pixels.py --port 8795   # 真 Chromium 读回真像素
+.\.venv\Scripts\python.exe tools\check_stats_export.py           # 统计导出（CSV + 多 sheet xlsx）
+.\.venv\Scripts\python.exe tools\verify_storage.py               # 存储位置与占用统计
 
 # 真实多房间验收（需要第二个房间号）
 $env:BILI_LIVE_ROOMS="804456,<房间号>"; $env:BILI_LIVE_SECONDS="60"
