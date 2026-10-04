@@ -67,6 +67,16 @@ class CollectorStats:
     started_at: float = 0.0
     ended_at: float | None = None
     by_type: dict[str, int] = field(default_factory=dict)
+    #: 上一次连接失败的原因（**给人看的一句话**）。
+    #:
+    #: 为什么不直接读日志：面板只能拿到快照，而原来这里连日志都丢了原因 ——
+    #: 异常分支写的是 `log.warning("连接失败: %s: %s", type(exc).__name__, exc)`，
+    #: 而 `AuthFailed` 之类异常自己是**空消息**，于是 `%s` 打出来是空的，
+    #: 只剩一个类型名。用户在面板上永远只看到"重连中"，不知道要重新登录。
+    last_error: str = ""
+    #: 上次失败的归类：`auth` / `network` / `protocol` / `unknown`（空 = 还没失败过）。
+    #: 面板据此决定是"请重新登录"还是"网络问题，请稍候"。
+    last_error_kind: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         data = {
@@ -87,10 +97,23 @@ class CollectorStats:
             "by_type": dict(self.by_type),
             "started_at": self.started_at,
             "ended_at": self.ended_at,
+            "last_error": self.last_error,
+            "last_error_kind": self.last_error_kind,
         }
         if self.started_at and self.ended_at:
             data["duration_s"] = round(self.ended_at - self.started_at, 1)
         return data
+
+
+#: 认证被拒绝时的**错误码 → 人话**。
+#:
+#: `-101` 是"未登录/登录失效"（TECH_DESIGN「错误码」表实测），也是最常见的一种 ——
+#: 采集中凭据过期就长这样。不翻译的话面板只能显示 `code=-101`，
+#: 用户不知道该去重新扫码（需求："凭据失效要看得见、而且要能照做"）。
+AUTH_CODE_HINTS: dict[int, str] = {
+    -101: "登录已失效，请重新扫码登录",
+    -1: "服务端未返回认证回应（可能是 token 失效或房间不可用）",
+}
 
 
 class RoomCollector:
@@ -231,6 +254,10 @@ class RoomCollector:
                 self._set_state(ConnState.AUTHED)
 
                 self._consecutive_auth_failures = 0
+                # 连上了就把旧的失败原因清掉：不清的话，一次早已恢复的抖动
+                # 会永远挂在面板上（`assess_health` 会一直报"网络不稳定"）。
+                self.stats.last_error = ""
+                self.stats.last_error_kind = ""
 
                 await connection.send_heartbeat()
                 self._set_state(ConnState.STREAMING)
@@ -254,11 +281,13 @@ class RoomCollector:
             except AuthFailed as exc:
                 self._consecutive_auth_failures += 1
                 self.stats.auth_failures += 1
+                # 把 `code=-101` 这类**翻译成人话**再记下来：面板要据此提示"请重新登录"
+                self._remember_auth_error(exc, int(getattr(exc, "code", 0) or 0))
                 log.error(
                     "认证失败(%d/%d): %s",
                     self._consecutive_auth_failures,
                     MAX_CONSECUTIVE_AUTH_FAILURES,
-                    exc,
+                    self.stats.last_error,
                 )
                 if self._consecutive_auth_failures >= MAX_CONSECUTIVE_AUTH_FAILURES:
                     self._set_state(ConnState.PAUSED)
@@ -267,9 +296,11 @@ class RoomCollector:
                     self._consecutive_auth_failures = 0
                     continue
             except (BiliApiError, OSError, asyncio.TimeoutError) as exc:
-                log.warning("连接失败: %s: %s，准备重连", type(exc).__name__, exc)
+                self._remember_error("network", exc, fallback="连接失败")
+                log.warning("连接失败: %s，准备重连", self.stats.last_error)
             except Exception as exc:  # noqa: BLE001 - 任何异常都要走重连而不是让采集整体崩掉
-                log.warning("连接异常: %s: %s，准备重连", type(exc).__name__, exc)
+                self._remember_error("unknown", exc, fallback="连接异常")
+                log.warning("连接异常: %s，准备重连", self.stats.last_error)
             finally:
                 if connection is not None:
                     self._sync_connection_stats(connection)
@@ -284,6 +315,29 @@ class RoomCollector:
             self._set_state(ConnState.RECONNECTING)
             log.info("%.1f 秒后重连（第 %d 次）", delay, attempt)
             await self._sleep_async(delay)
+
+    def _remember_error(self, kind: str, exc: BaseException, *, fallback: str) -> None:
+        """记下"上次为什么失败"，供面板显示（**必须是一句能照做的话**）。
+
+        `fallback` + 类型名是兜底：`BiliApiError("")` 与 `TimeoutError()` 的
+        `str(exc)` 都是**空串**（实测），只写 `str(exc)` 会让面板与日志都没有线索。
+        """
+        detail = str(exc).strip()
+        name = type(exc).__name__
+        self.stats.last_error_kind = kind
+        self.stats.last_error = f"{fallback}（{name}）" + (f"：{detail}" if detail else "")
+
+    def _remember_auth_error(self, exc: BaseException, code: int) -> None:
+        """认证失败的专用记录：把**错误码翻译成人话**。
+
+        为什么要翻译：`AuthFailed` 的文案是 `认证失败 code=-101` —— 对用户毫无意义，
+        而 `-101` 恰恰是"登录失效"（见 TECH_DESIGN「错误码」表）。
+        不翻译的话，采集中凭据过期时用户看到的只是一串负数，
+        不知道该重新扫码登录（这正是"凭据失效要看得见"这条需求要解决的）。
+        """
+        reason = AUTH_CODE_HINTS.get(int(code), "认证被服务端拒绝")
+        self.stats.last_error_kind = "auth"
+        self.stats.last_error = f"认证失败：{reason}（code={code}）"
 
     async def _pump(self, connection: DanmakuConnection) -> None:
         """读循环：拉取消息并交给处理管道。

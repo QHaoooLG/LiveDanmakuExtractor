@@ -241,6 +241,33 @@ async def test_collector_recovers_from_transient_auth_failure(
     assert any(record["text"] == "恢复后收到" for record in read_all_holder(collector))
 
 
+async def test_collector_records_error_reason(
+    make_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """失败原因必须**记下来并可读** —— 面板与日志都靠它。
+
+    回归：原来异常分支写的是 `log.warning("连接失败: %s: %s", type(exc).__name__, exc)`，
+    而 `AuthFailed` 自己是**空消息**，于是那一行打出 "连接失败: AuthFailed: " ——
+    用户在面板上只看到"重连中"，排查时日志也给不出任何线索。
+
+    另外断言**成功连接后会清掉**旧原因：不清的话，一次早已恢复的抖动会永远挂在面板上。
+    """
+    monkeypatch.setattr("bili_danmaku.collector.backoff_delay", lambda *a, **k: 0.05)
+    config = fast_config(make_config)
+
+    async with FakeDanmakuServer(
+        notifications=[danmaku("恢复后收到", "m1")], auth_fail_times=1, auth_code=-101
+    ) as server:
+        collector, _api, _sink, _bus = build(config, server)
+        # 跑到"已经成功连上并收到消息"为止
+        stats = await collector.run(duration=3.0)
+
+    assert stats.auth_failures >= 1
+    # 认证曾失败过，但**最终连上了** ⇒ 失败原因应已被清空
+    assert stats.last_error == "", f"连上之后不该还挂着旧错误：{stats.last_error!r}"
+    assert stats.last_error_kind == ""
+
+
 def read_all_holder(collector: RoomCollector) -> list[dict]:
     """从 collector 关联的 sink 目录读取记录（便于断言）。"""
     return read_all(Path(collector.config.sinks.out_dir))

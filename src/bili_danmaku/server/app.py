@@ -23,7 +23,7 @@ from starlette.background import BackgroundTask
 
 from .. import __version__
 from .. import store as store_module
-from ..analysis import analyze, words_from_buckets
+from ..analysis import analyze, assess_health, words_from_buckets
 from ..annotations import AnnotationStore, resolve_annotations_path, summarize
 from ..config import Config
 from ..credentials import Credentials
@@ -340,10 +340,18 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
+        """存活探针 + 前端状态 + **采集健康提示**。
+
+        `attention` 是 `analysis.assess_health()` 的结果。放在这里而不是新开一个
+        端点，是因为面板本来就在轮询 `/api/health`（搭车返回，不多一轮轮询）。
+        它回答的是"**现在需要我做什么吗**" —— 例如凭据在采集中失效时，
+        用户不该只看到"重连中"而要去翻日志。
+        """
         payload = panel.health()
         payload["version"] = __version__
         payload["uptime_s"] = round(time.time() - app.state.started_at, 1)
         payload["frontend_built"] = dist is not None
+        payload["attention"] = assess_health(panel.rooms())
         return payload
 
     @app.get("/api/rooms")

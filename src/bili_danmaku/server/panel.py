@@ -85,6 +85,11 @@ class RoomRuntime:
             "last_message_at": stats.last_message_at,
             "by_type": dict(stats.by_type),
             "error": self.error,
+            # 上次连接失败的原因与归类 —— 面板据此区分"请重新登录"与"网络问题"。
+            # 缺了这两个字段时，**运行中**的凭证失配对用户完全不可见（只能翻日志，
+            # 而日志里当时连原因都没写，见 collector._remember_error 的说明）。
+            "last_error": stats.last_error,
+            "last_error_kind": stats.last_error_kind,
         }
 
 

@@ -14,6 +14,7 @@ import AnalysisPanel from './components/AnalysisPanel.vue'
 import BookmarkBar from './components/BookmarkBar.vue'
 import DensityBar from './components/DensityBar.vue'
 import FilterBar from './components/FilterBar.vue'
+import HealthBanner from './components/HealthBanner.vue'
 import RoomPanel from './components/RoomPanel.vue'
 import ScBanner from './components/ScBanner.vue'
 import StatsPanel from './components/StatsPanel.vue'
@@ -201,6 +202,17 @@ function showToast(message) {
   setTimeout(() => {
     if (toast.value === message) toast.value = ''
   }, TOAST_MS)
+}
+
+/**
+ * 健康横幅上的「去登录」。
+ *
+ * 为什么不能直接在这里扫码：**扫码需要图形界面**（要显示二维码），
+ * 而 Web 面板是浏览器里的页面 —— 让它去画二维码会引入一套完全不同的实现。
+ * 托盘应用本来就有启动面板（带扫码登录），所以这里只负责把用户指过去。
+ */
+function showLoginHint() {
+  showToast('请在托盘图标上右键 →「显示启动面板」，在面板顶部点「扫码登录」')
 }
 
 async function refresh() {
@@ -586,6 +598,10 @@ onUnmounted(() => {
       @back-to-live="backToLive"
       @select-session="onSelectSession"
     />
+
+    <!-- 采集健康提示：放在 SC 横幅**之上**（它比 SC 更"需要你动手"）。
+         数据搭 `/api/health` 的车，不额外轮询。 -->
+    <HealthBanner :attention="health?.attention" @open-login="showLoginHint" />
 
     <ScBanner :events="visible" :threshold="scThreshold" />
 

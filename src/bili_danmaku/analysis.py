@@ -546,6 +546,107 @@ def analyze(
     }
 
 
+def assess_health(
+    rooms: Iterable[Any],
+    *,
+    reconnect_warn: int = 3,
+    reconnect_alert: int = 8,
+) -> dict[str, Any]:
+    """判断采集是否**需要用户介入**，并给出一句能照做的话。
+
+    需求原话："当凭证失效时，在启动面板用较为明显的信息栏提示用户登录"。
+    启动时的登录提示条已经做了；这里补的是**运行中**那一半 ——
+    采集中凭据过期/被踢时，用户原来在面板上只看到"重连中"，
+    只能自己翻日志（而日志当时还因为异常是空消息而**没写原因**）。
+
+    输入是房间快照的可迭代集合（`PanelService.rooms()` 的元素），
+    每个至少要能取到 `conn_state` / `last_error` / `last_error_kind` / `reconnects`。
+
+    判据（按严重程度从高到低）：
+
+    | 级别 | 条件 | 提示语 |
+    |------|------|--------|
+    | `alert` | 有房间 `last_error_kind == "auth"` | 「登录已失效…请重新扫码登录」 |
+    | `warn` | 有房间处于 `PAUSED`（连续认证失败后的暂停） | 「认证反复失败，已暂停…」 |
+    | `warn` | 单房间重连次数 ≥ `reconnect_alert` | 「连接反复中断」 |
+    | `warn` | 有房间 `last_error_kind == "network"` 且重连 ≥ `reconnect_warn` | 「网络不稳定」 |
+    | `ok` | 其余 | 无提示 |
+
+    ⚠️ **不要**看到一次重连就报警：B 站本身会主动断连，偶发一次是正常的。
+    只有"反复"或"原因明确是鉴权"才值得占用用户注意力。
+    """
+    items = [item for item in rooms]
+    if not items:
+        return {"level": "ok", "title": "", "detail": "", "rooms": []}
+
+    def field(room: Any, name: str, default: Any = None) -> Any:
+        if isinstance(room, dict):
+            return room.get(name, default)
+        return getattr(room, name, default)
+
+    def room_id(room: Any) -> Any:
+        return field(room, "room_id")
+
+    auth_rooms = [r for r in items if field(r, "last_error_kind") == "auth"]
+    if auth_rooms:
+        first = auth_rooms[0]
+        # `last_error` 本身已经带"认证失败："前缀（见 collector._remember_auth_error），
+        # 这里不再重复一次，否则会读成"认证失败：认证失败：…"
+        return {
+            "level": "alert",
+            "title": "采集的登录已失效",
+            "detail": (
+                f"房间 {'、'.join(str(room_id(r)) for r in auth_rooms)}："
+                f"{field(first, 'last_error', '')}。请重新扫码登录后重启采集。"
+            ),
+            "rooms": [room_id(r) for r in auth_rooms],
+        }
+
+    paused = [r for r in items if str(field(r, "conn_state", "")).upper() == "PAUSED"]
+    if paused:
+        first = paused[0]
+        return {
+            "level": "warn",
+            "title": "认证反复失败，采集已暂停",
+            "detail": (
+                f"房间 {'、'.join(str(room_id(r)) for r in paused)} 连续认证失败后暂停恢复中："
+                f"{field(first, 'last_error', '')}。若持续如此，请检查登录态。"
+            ),
+            "rooms": [room_id(r) for r in paused],
+        }
+
+    flapping = [
+        r for r in items if int(field(r, "reconnects", 0) or 0) >= reconnect_alert
+    ]
+    if flapping:
+        return {
+            "level": "warn",
+            "title": "连接反复中断",
+            "detail": (
+                f"房间 {'、'.join(str(room_id(r)) for r in flapping)} 已重连 "
+                f"{max(int(field(r, 'reconnects', 0) or 0) for r in flapping)} 次；"
+                "常见原因是网络不稳定或房间无人开播。"
+            ),
+            "rooms": [room_id(r) for r in flapping],
+        }
+
+    unstable = [
+        r
+        for r in items
+        if int(field(r, "reconnects", 0) or 0) >= reconnect_warn
+        and field(r, "last_error_kind") == "network"
+    ]
+    if unstable:
+        return {
+            "level": "warn",
+            "title": "网络连接不稳定",
+            "detail": f"最近一次失败原因：{field(unstable[0], 'last_error', '')}",
+            "rooms": [room_id(r) for r in unstable],
+        }
+
+    return {"level": "ok", "title": "", "detail": "", "rooms": []}
+
+
 def bucket_of(recv_ts: float, *, size_s: float) -> float:
     """把时间戳归到时间片（热点突增按片比较）。"""
     size = max(float(size_s), 1.0)
