@@ -81,37 +81,37 @@ npm run build     # 产物写入 web/dist，后端会自动托管
 bili-danmaku login
 
 # 协议自检：房间解析 → token → 握手 → 心跳 → 采样，排障第一步
-bili-danmaku probe 7878 --seconds 30
+bili-danmaku probe <房间号> --seconds 30
 
 # 抓取并落盘（Ctrl+C 可随时停止并正常收尾）
-bili-danmaku grab 804456 --duration 5m --out data
+bili-danmaku grab <房间号> --duration 5m --out data
 
 # 打开 Web 面板实时看弹幕
-bili-danmaku web --rooms 7878 --open
+bili-danmaku web --rooms <房间号> --open
 ```
 
 ### 抓取
 
 ```bash
-bili-danmaku grab 804456 --format jsonl,csv,txt,sqlite        # 指定落盘格式
-bili-danmaku grab 804456 --until 23:00 --history              # 抓到指定时刻，并补种最近的历史弹幕
-bili-danmaku grab 804456 --duration 1h --anonymize            # 脱敏输出（uid 哈希、昵称掩码）
+bili-danmaku grab <房间号> --format jsonl,csv,txt,sqlite        # 指定落盘格式
+bili-danmaku grab <房间号> --until 23:00 --history              # 抓到指定时刻，并补种最近的历史弹幕
+bili-danmaku grab <房间号> --duration 1h --anonymize            # 脱敏输出（uid 哈希、昵称掩码）
 
 # 过滤
-bili-danmaku grab 804456 --types danmaku,gift                 # 按事件类型
-bili-danmaku grab 804456 --keyword 主播 --keyword "re:^\d+$"  # 关键词，re: 前缀走正则
-bili-danmaku grab 804456 --min-price 30                       # 只要 30 元以上的礼物 / SC / 上舰
-bili-danmaku grab 804456 --min-medal-level 10 --uid 12345     # 粉丝牌等级 + uid 白名单
+bili-danmaku grab <房间号> --types danmaku,gift                 # 按事件类型
+bili-danmaku grab <房间号> --keyword 主播 --keyword "re:^\d+$"  # 关键词，re: 前缀走正则
+bili-danmaku grab <房间号> --min-price 30                       # 只要 30 元以上的礼物 / SC / 上舰
+bili-danmaku grab <房间号> --min-medal-level 10 --uid <uid>     # 粉丝牌等级 + uid 白名单
 ```
 
 ### Web 面板
 
 ```bash
-bili-danmaku web --rooms 7878 --open          # 前台运行，Ctrl+C 停止
-bili-danmaku web --rooms 7878,123456          # 同时监控多个房间
+bili-danmaku web --rooms <房间号> --open          # 前台运行，Ctrl+C 停止
+bili-danmaku web --rooms <房间号>,<房间号>          # 同时监控多个房间
 
 # 后台常驻：关掉终端也继续跑
-bili-danmaku web start --rooms 7878 --open
+bili-danmaku web start --rooms <房间号> --open
 bili-danmaku web status                       # 查看地址 / pid / 已运行时间
 bili-danmaku web logs --tail 50               # 查看后台日志
 bili-danmaku web stop                         # 优雅停止（先把未落盘的数据写盘）
@@ -128,7 +128,7 @@ bili-danmaku web stop                         # 优雅停止（先把未落盘�
 bili-danmaku stats --top 10                                   # 类型分布、发言榜、会话列表
 bili-danmaku export --session <id> --format csv --out out.csv
 bili-danmaku export --keyword 主播 --format jsonl --out hits.jsonl
-bili-danmaku replay data/804456_20260918-14.jsonl --to csv --out converted.csv
+bili-danmaku replay data/<房间号>_20260918-14.jsonl --to csv --out converted.csv
 ```
 
 ### 词云
@@ -149,9 +149,9 @@ pip install -e ".[wordcloud]"    # jieba（中文分词）+ wordcloud
 ### SC 汇总与告警
 
 ```bash
-bili-danmaku sc --room 23438368                  # 条数 / 金额合计 / 贡献榜 / 最近明细
-bili-danmaku sc --room 23438368 --min-price 30   # 只看 30 元及以上
-bili-danmaku sc 23438368 --follow --min-price 30 --duration 3600 --bell   # 实时告警
+bili-danmaku sc --room <房间号>                  # 条数 / 金额合计 / 贡献榜 / 最近明细
+bili-danmaku sc --room <房间号> --min-price 30   # 只看 30 元及以上
+bili-danmaku sc <房间号> --follow --min-price 30 --duration 3600 --bell   # 实时告警
 ```
 
 ## 数据产物
@@ -209,27 +209,6 @@ port = 8787
 **使用边界**：仅用于个人学习、研究或自有直播间的运营分析等授权场景。
 请遵守 B 站用户协议与相关法律法规，不要用于骚扰、人肉、批量爬取或商业转售。
 本项目默认单房间单连接、限制并发房间数、限制请求频率，从设计上避免给服务端造成压力。
-
-如果发现安全问题（尤其是凭据泄露风险），请通过仓库 **Security** 标签页的私密渠道反馈，
-不要在公开 issue 里附带真实的 uid、昵称或凭据。
-
-## 已知限制
-
-| 限制 | 说明 |
-|------|------|
-| SC 金额单位未经真实样本验证 | 拿到真实数据若发现差 1000 倍，用 `--price-unit milli` 覆盖即可 |
-| 跨进程无单实例 | 同时启动两个面板抓同一房间会产生重复数据 |
-| 磁盘不会自动清理 | JSONL 按小时轮转但不会删除，需要自行归档 |
-| 热点突增分析 | 只用合成数据验证过，可信度低于词频与刷屏检测 |
-
-## 贡献
-
-欢迎提交 issue 与 pull request。
-
-- 提交前请确认改动能实际跑起来，`bili-danmaku probe <房间>` 是最快的自检方式；
-- 涉及协议解析的改动，请先用 `probe --dump-raw` 抓真实数据核对，不要凭猜测修改字段；
-- 提交信息建议遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
-  `feat(web): …` / `fix(login): …` / `chore(tools): …`。
 
 ## 许可
 
