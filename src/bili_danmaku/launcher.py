@@ -18,14 +18,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import queue
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .login import LoginStatus, QrLoginSession, check_status, local_status
+
 log = logging.getLogger("bili_danmaku.launcher")
+
+#: 重新导出，保持 `from bili_danmaku.launcher import LoginStatus` 这类旧写法可用。
+#: 登录逻辑本身已搬到 `login.py`（见那边的说明），这里只是转出。
+__all__ = ["LauncherOptions", "LoginStatus", "PanelController", "PanelStatus", "QrLoginSession"]
 
 #: 等待"服务真的起来 / 真的停掉"的默认超时（秒）
 DEFAULT_START_TIMEOUT = 20.0
@@ -67,160 +72,6 @@ class PanelStatus:
     frontend_built: bool = False
     dist: str = ""
     error: str = ""
-
-
-@dataclass
-class LoginStatus:
-    """登录态快照（启动面板用它决定要不要弹"凭证失效"的提示条）。
-
-    **离线可判据**：`source`/`has_sessdata` 只反映本地凭据文件的情况，
-    不需要联网；`logged_in`/`uname`/`message` 要联网校验后才可靠。
-    """
-
-    logged_in: bool = False
-    #: 凭据来源：`file` / `env` / `inline` / `none`
-    source: str = "none"
-    has_sessdata: bool = False
-    uname: str = ""
-    #: 面向用户的说明（成功时为空）
-    message: str = ""
-    #: 是否已经联网确认过
-    checked: bool = False
-
-
-class QrLoginSession:
-    """一次"扫码登录"的**后台**驱动，供 tkinter 轮询。
-
-    为什么需要它：扫码要"申请二维码 → 每 2 秒轮询 → 成功后保存"，
-    全程要几十秒且**必须在后台**（tkinter 主线程一旦阻塞，窗口就假死了）。
-    这里把它做成一个小状态机：
-
-        session = QrLoginSession()
-        session.start()                 # 起后台线程
-        # GUI 每 200ms 调一次：
-        event = session.poll()          # {"state": "qr"|"scanned"|"ok"|"failed"|"expired", ...}
-        png = session.qr_png            # 拿到二维码后渲染成 PNG 给 tkinter
-
-    **线程安全**：后台线程只往 `queue.Queue` 里放事件，`poll()` 在主线程消费。
-    """
-
-    #: 轮询间隔（秒）—— 与服务端约定一致
-    POLL_INTERVAL = 2.0
-    #: 单张二维码的有效期（秒）
-    QR_TTL = 180.0
-
-    @staticmethod
-    def status_text(code: int) -> str:
-        """扫码状态码 → 中文（与终端共用同一套文案，避免两处说法不一致）。"""
-        from .credentials import qr_status_text
-
-        return qr_status_text(code)
-
-    def __init__(self, *, cookie_file: str | None = None) -> None:
-        self.cookie_file = cookie_file
-        self._events: "queue.Queue[dict[str, Any]]" = queue.Queue()
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self.qr_png: bytes | None = None
-        self.qr_url: str = ""
-        self.credentials: Any = None
-
-    # -- 生命周期 ------------------------------------------------------ #
-
-    def start(self) -> bool:
-        """起后台线程开始登录流程。已在跑时返回 False。"""
-        if self._thread is not None and self._thread.is_alive():
-            return False
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="qr-login", daemon=True)
-        self._thread.start()
-        return True
-
-    def cancel(self) -> None:
-        """请求停止（线程是 daemon，最坏情况随进程一起退出）。"""
-        self._stop.set()
-
-    def poll(self) -> dict[str, Any] | None:
-        """取**最新**事件；没有新事件返回 None。
-
-        ⚠️ 刻意**只返回最新一条**并丢掉中间的（队列被抽干）：UI 只关心"现在是什么状态"，
-        中间那些 `waiting` 没有渲染价值，留着只会让窗口在刷新时有延迟感。
-        代价是调用方**看不到完整序列** —— 需要序列的场合（用例）直接读 `_events`。
-        """
-        latest = None
-        while True:
-            try:
-                latest = self._events.get_nowait()
-            except queue.Empty:
-                return latest
-
-    def _emit(self, state: str, **extra: Any) -> None:
-        self._events.put({"state": state, **extra})
-
-    # -- 实际流程（在后台线程里跑） ------------------------------------ #
-
-    def _run(self) -> None:
-        try:
-            asyncio.run(self._login())
-        except Exception as exc:  # noqa: BLE001 - 任何异常都要变成一条事件
-            log.exception("扫码登录失败")
-            self._emit("failed", message=f"{type(exc).__name__}: {exc}")
-
-    async def _login(self) -> None:
-        """申请二维码 → 轮询 → 成功后**落盘**。
-
-        落盘走 `credentials.save_credentials()`（与 `bili-danmaku login` 同一条路径、
-        同一份文件），这样 CLI 与面板看到的是同一份凭据。
-        """
-        import httpx
-
-        from .credentials import (
-            QR_EXPIRED,
-            QR_OK,
-            _HEADERS,
-            classify_qr_status,
-            credentials_from_client,
-            poll_qr_once,
-            render_qr_png,
-            request_qr,
-            save_credentials,
-        )
-
-        async with httpx.AsyncClient(headers=_HEADERS, timeout=10.0, follow_redirects=True) as client:
-            for attempt in range(1, 4):
-                if self._stop.is_set():
-                    self._emit("cancelled")
-                    return
-                url, key = await request_qr(client)
-                self.qr_url = url
-                self.qr_png = render_qr_png(url)
-                self._emit("qr", url=url, png=bool(self.qr_png), attempt=attempt)
-
-                deadline = time.monotonic() + self.QR_TTL
-                last = None
-                while time.monotonic() < deadline:
-                    if self._stop.is_set():
-                        self._emit("cancelled")
-                        return
-                    await asyncio.sleep(self.POLL_INTERVAL)
-                    code = await poll_qr_once(client, key)
-                    if code != last:
-                        last = code
-                        self._emit(
-                            classify_qr_status(code),
-                            code=code,
-                            text=self.status_text(code),
-                        )
-                    if code == QR_OK:
-                        creds = credentials_from_client(client)
-                        target = self.cookie_file or ".secrets/cookies.json"
-                        save_credentials(creds, target)
-                        self.credentials = creds
-                        self._emit("ok", cookie_file=str(target))
-                        return
-                    if code == QR_EXPIRED:
-                        break  # 换一张码
-            self._emit("failed", message="二维码多次失效，请重试")
 
 
 class PanelController:
@@ -597,72 +448,30 @@ class PanelController:
             return None
 
     def local_credential_status(self) -> LoginStatus:
-        """**不联网**看一眼本地凭据：有没有文件、有没有 SESSDATA。
-
-        启动面板要用它做两件事：① 首屏立刻给出一个说法（不必等网络）；
-        ② 判断"值不值得去联网校验" —— 没有凭据就不必发请求。
-        """
-        from .credentials import load_credentials
-
-        cookie_file = self.options.cookie_file
-        if self._config is not None:
-            cookie_file = cookie_file or getattr(self._config.api, "cookie_file", None)
-        try:
-            creds = load_credentials(cookie_file, None)
-        except Exception as exc:  # noqa: BLE001 - 读凭据失败不该让面板起不来
-            return LoginStatus(message=f"读取凭据失败：{type(exc).__name__}: {exc}")
-
-        has = bool(getattr(creds, "sessdata", ""))
-        status = LoginStatus(
-            logged_in=has,
-            source=str(getattr(creds, "source", "none")),
-            has_sessdata=has,
-            checked=False,
-        )
-        if not has:
-            status.message = "未登录（未找到凭据，部分昵称会被平台打码）"
-        return status
+        """**不联网**看一眼本地凭据（首屏立刻有说法）。实现见 `login.local_status`。"""
+        return local_status(self.options.cookie_file, config=self._config)
 
     def check_login(self, *, timeout: float = 10.0) -> LoginStatus:
-        """**联网**校验凭据是否仍然有效，并取回昵称。
+        """**联网**校验凭据是否仍有效（判断"凭证失效"的权威判据）。
 
-        这是判断"凭证失效"的权威判据 —— 本地有 SESSDATA 不等于它还有效
-        （会过期、会被踢），只有 `nav` 接口的 `isLogin` 说了算。
-        网络异常**不等于**凭据失效，所以那种情况单独给一条说明，不要误导用户去重新扫码。
+        实现搬到 `login.check_status()` —— 那边是**与界面无关**的独立模块，
+        所以能直接单测，不必构造整个 `PanelController`（这正是这次拆分的目的）。
+        配置还没建出来时（面板没启动过）先建一个，否则拿不到 `api` 段。
         """
-        status = self.local_credential_status()
-        from .api import BiliApi, BiliApiError
-        from .credentials import load_credentials
+        config = self._config
+        if config is None:
+            try:
+                config = self._build_config()
+            except Exception as exc:  # noqa: BLE001 - 建配置失败也要给个可读结论
+                return LoginStatus(message=f"无法读取配置：{type(exc).__name__}: {exc}")
+        return check_status(
+            self.options.cookie_file, config=config, timeout=timeout
+        )
 
-        cookie_file = self.options.cookie_file
-        if self._config is not None:
-            cookie_file = cookie_file or getattr(self._config.api, "cookie_file", None)
-        try:
-            creds = load_credentials(cookie_file, None)
-        except Exception as exc:  # noqa: BLE001
-            status.message = f"读取凭据失败：{type(exc).__name__}: {exc}"
-            return status
+    # ------------------------------------------------------------------ #
+    # 扫码登录（GUI 用；实现在 `login.QrLoginSession`）
+    # ------------------------------------------------------------------ #
 
-        config = self._config or self._build_config()
-
-        async def _probe() -> tuple[bool, dict[str, Any]]:
-            async with BiliApi(config, creds) as api:
-                result = await api.nav()
-            return result.code == 0 and bool((result.data or {}).get("isLogin")), (result.data or {})
-
-        try:
-            ok, data = asyncio.run(asyncio.wait_for(_probe(), timeout=timeout))
-        except (BiliApiError, OSError, TimeoutError, asyncio.TimeoutError) as exc:
-            # 网络问题：**不要**把用户赶去重新登录
-            status.checked = False
-            status.message = f"无法校验登录态（网络问题）：{type(exc).__name__}"
-            return status
-
-        status.checked = True
-        status.logged_in = ok
-        if ok:
-            status.uname = str(data.get("uname") or "")
-            status.message = ""
-        else:
-            status.message = "登录已失效（凭据过期或被踢），请重新扫码登录"
-        return status
+    def new_login_session(self, **kwargs: Any) -> QrLoginSession:
+        """建一个扫码登录会话（凭据文件跟随本控制器的配置）。"""
+        return QrLoginSession(cookie_file=self.options.cookie_file, **kwargs)

@@ -263,7 +263,7 @@ class LauncherWindow:
             try:
                 status = self.controller.check_login() if online else self.controller.local_credential_status()
             except Exception as exc:  # noqa: BLE001 - 检查失败不该崩窗口
-                from ..launcher import LoginStatus
+                from ..login import LoginStatus
 
                 status = LoginStatus(message=f"登录检查失败：{type(exc).__name__}: {exc}")
             self.root.after(0, lambda: self._apply_login_status(status, online=online))
@@ -286,15 +286,14 @@ class LauncherWindow:
     # ------------------------------------------------------------------ #
 
     def start_qr_login(self) -> None:
-        """开始扫码登录：后台申请二维码 + 轮询，主线程每 200ms 消费事件。"""
+        """开始扫码登录：后台申请二维码 + 轮询，主线程每 200ms 消费事件。
+
+        会话由 `controller.new_login_session()` 建（凭据文件跟随配置），
+        这样"用哪个 cookies.json"只有一处决定 —— 否则 GUI 与面板会各算一遍。
+        """
         if self._login_session is not None:
             return
-        from ..launcher import QrLoginSession
-
-        cookie_file = None
-        if self.controller.options.cookie_file:
-            cookie_file = self.controller.options.cookie_file
-        session = QrLoginSession(cookie_file=cookie_file)
+        session = self.controller.new_login_session()
         if not session.start():
             return
         self._login_session = session
