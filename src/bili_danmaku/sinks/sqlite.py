@@ -25,6 +25,8 @@ from .base import Sink
 
 log = logging.getLogger("bili_danmaku.sinks.sqlite")
 
+#: 结构期望版本。**只表示"期望变了"，不驱动迁移**（迁移见 `MIGRATIONS`）；
+#: 新增索引靠 `SCHEMA` 里的 `CREATE INDEX IF NOT EXISTS` 自愈，不必动这里。
 SCHEMA_VERSION = "3"
 
 SCHEMA = """
@@ -78,6 +80,18 @@ CREATE INDEX IF NOT EXISTS idx_event_session ON event(session_id);
 -- 实测 20 万行：`GROUP BY recv_ts, type` 从 127 ms 降到 38 ms。只用
 -- `(room_id, recv_ts)` 时索引覆盖不到 type，SQLite 会退化成临时 B 树。
 CREATE INDEX IF NOT EXISTS idx_event_room_ts_type ON event(room_id, recv_ts, type);
+-- V3-b 后续：全库发言榜（`/api/stats` 的 top_senders）用。
+-- 语句是 `SELECT uid, uname, COUNT(*) FROM event WHERE uid IS NOT NULL
+-- GROUP BY uid ORDER BY 2 DESC` —— 只建 `(uid)` 时 SQLite 每行都要**回表**取 uname，
+-- 实测全库 **27.6 ms**；改成 `(uid, uname)` 覆盖索引后 **1.5 ms**（↓18 倍）。
+--
+-- 为什么用**新索引名**而不是把 idx_event_uid 改成两列：`CREATE INDEX IF NOT EXISTS`
+-- 对已存在的同名索引不会重建 ⇒ 老库永远拿不到升级。新名字才能靠
+-- "每次开库都跑一遍 SCHEMA"这条自愈机制补上（与 V3-a 的 idx_event_room_ts_type 同理）。
+--
+-- `idx_event_uid` 保留：它与本索引前缀重复，但删它要走 ALTER/DROP 迁移，
+-- 收益只是几十 KB 空间，不值得在"自愈路径"之外多开一条迁移。
+CREATE INDEX IF NOT EXISTS idx_event_uid_uname ON event(uid, uname);
 """
 
 #: 旧库升级：新增列只能靠 ALTER TABLE（`CREATE TABLE IF NOT EXISTS` 对已存在的表无效）。

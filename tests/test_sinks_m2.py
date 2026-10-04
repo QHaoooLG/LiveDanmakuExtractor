@@ -183,6 +183,75 @@ def test_sqlite_creates_schema_and_rows(make_config, make_event, tmp_path: Path)
     assert sink.stats.written == 2
 
 
+def test_sqlite_creates_top_senders_covering_index(
+    make_config, make_event, tmp_path: Path
+) -> None:
+    """全库发言榜要能用上 `(uid, uname)` **覆盖索引**。
+
+    回归：只有 `idx_event_uid(uid)` 时，`SELECT uid, uname, COUNT(*) ... GROUP BY uid`
+    每一行都要**回表**取 uname（实测全库 27.6 ms）；加覆盖索引后降到 1.5 ms。
+    这里断言的是"索引存在**且查询计划真的用它**"—— 只断言索引存在的话，
+    改坏了 SQL 也测不出来。
+    """
+    _populate(make_config(sinks={"types": ["sqlite"]}), [make_event(seq=1)])
+
+    connection = sqlite3.connect(tmp_path / "danmaku.db")
+    try:
+        names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='event'"
+            )
+        }
+        assert "idx_event_uid_uname" in names, f"覆盖索引没建出来：{sorted(names)}"
+
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT uid, uname, COUNT(*) AS c FROM event "
+            "WHERE uid IS NOT NULL GROUP BY uid ORDER BY c DESC LIMIT 10"
+        ).fetchall()
+        detail = " ".join(str(row[3]) for row in plan)
+        assert "COVERING INDEX" in detail and "idx_event_uid_uname" in detail, (
+            f"发言榜没有走覆盖索引：{detail}"
+        )
+    finally:
+        connection.close()
+
+
+def test_sqlite_schema_self_heals_index_on_old_database(
+    make_config, make_event, tmp_path: Path
+) -> None:
+    """老库（建库时还没有这个索引）下次打开时应**自动补上**。
+
+    这正是"新增索引不用写 MIGRATIONS"这条约定的依据 —— 如果哪天把它改成
+    "同名索引改列"，`CREATE INDEX IF NOT EXISTS` 就不会重建，老库永远拿不到升级。
+    """
+    config = make_config(sinks={"types": ["sqlite"]})
+    # 先正常建库，再**手工丢掉**新索引，模拟"老版本建的库"
+    _populate(config, [make_event(seq=1)])
+
+    db = tmp_path / "danmaku.db"
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute("DROP INDEX IF EXISTS idx_event_uid_uname")
+        connection.commit()
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_event_uid_uname'"
+        ).fetchone(), "前置条件：索引应当已被删掉"
+    finally:
+        connection.close()
+
+    # 再用 SqliteSink 打开它 —— open() 每次都跑一遍 SCHEMA，索引应当被补回
+    _populate(config, [make_event(seq=2)])
+
+    connection = sqlite3.connect(db)
+    try:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_event_uid_uname'"
+        ).fetchone(), "老库没有被自愈"
+    finally:
+        connection.close()
+
+
 def test_sqlite_dedupe_key_is_unique(make_config, make_event, tmp_path: Path) -> None:
     """内存去重之外的第二道防线：同一 dedupe_key 第二次写入应被忽略。"""
     config = make_config(sinks={"types": ["sqlite"]})
