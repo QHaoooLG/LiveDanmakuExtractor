@@ -1291,15 +1291,84 @@ exe **没有 stderr**（`sys.stderr is None`）⇒ 日志**全部丢弃**。托�
 
 - **真人手测仍是必需的**（自动化验不了）：托盘右键菜单点击、气泡提示、
   窗口手感、高 DPI 缩放，以及**时间轴横向滚动手感**（滚轮速率是否跟手）。
-- 1 分钟档在超大库上会有数千个 `<button>`，DOM 会偏重。**不做截断是有意的** ——
-  截断会让时间轴静默少一段，正是本项目最忌讳的"看起来像没采集"。
-  （下一步要做 **canvas 版时间轴**，见 §5.15。）
 - 托盘进程内嵌 uvicorn 后，`web.token` / 仅回环等**安全约束照旧适用**（DEC-4 不变）。
 - **切换存储目录后，旧目录的历史在面板里看不到**（见 §5.13.18 的警告框）——
-  要么在界面上标注"历史来自 <目录>"，要么给一个"历史库可以另选"的入口。**待定**。
+  本轮已补标注（启动面板 "历史/统计仍来自原目录"）；"给一个历史库另选的入口"
+  仍然**待定**。
 - **`_drop_stopwords()` 的副作用**（被剔的词不腾榜位、`total_words` 仍是剔除前口径）
   —— 需求方要求**先搁置，后续再讨论**。
 - **`web start` 的 `--no-open` 默认行为** —— 同样先搁置。
+- 时间轴的 canvas 版**已落地并保留 DOM 版可回滚**（见 §5.13.22）。
+
+#### 5.13.21 前端组件级测试（优化项 ⑨）
+
+**需求**：引入前端**组件级**测试（此前只有纯逻辑的 `node:test`）。
+
+| 部分 | 落点 | 说明 |
+|------|------|------|
+| `.vue` 编译 | 🆕 `web/test/vue-loader.mjs` + `register-vue.mjs` | 用 `@vue/compiler-sfc` 以**客户端模式**（`inlineTemplate: true`、`isProd: false`）现编 SFC，`npm test` 通过 `--import` 登记 |
+| 挂载 | 🆕 `web/test/helpers/vue.mjs::mountComponent()` | 只用**公开 API**（`createApp` + `h` + `nextTick`），约 60 行 wrapper（`find`/`text`/`classes`/`attributes`/`trigger`/`emitted`） |
+| DOM | `jsdom`（**唯一新增依赖**） | 组件测试必须有 `document` |
+| 用例 | 🆕 `web/test/{timeline,density}.test.mjs` + `base64.test.mjs` | 纯计算、交互、渲染记录分层 |
+
+**三个必须记住的环境事实**（踩了很久，改动前先读）：
+
+1. **`setupDom()` 必须最先跑，Vue 相关模块只能动态 `import()`**。
+   `@vue/runtime-dom` 在**模块求值那一刻**就把 `document` 抓进模块级变量，
+   之后再设 `globalThis.document` 没用。ESM 的静态 import 全部先于模块体求值，
+   所以测试文件顶部不能静态 import `vue`。
+2. **不要用 Vite 的 `ssrLoadModule()` 编译组件**。它是给 SSR 用的：
+   `@vitejs/plugin-vue` 按 SSR 模式编译，产物里只有 `ssrRender`、**没有** `render`，
+   挂载时报的是完全指不到病根的
+   `TypeError: Cannot read properties of undefined (reading 'modules')`
+   （真提示是同时打出的 `Component is missing template or render function`）。
+   换成自己的 loader 之后还顺带消掉了"SFC 走 Vite、测试走 Node，各拿到一份 Vue"。
+3. **不要用 `@vue/test-utils`**。它的 `mount()` 依赖 Vue 的**内部** `currentInstance`，
+   在"必须先装 jsdom 再 import Vue"的前提下极易撞上两份 Vue。
+   实测装好后又卸掉了 —— `helpers/vue.mjs` 那 60 行公开 API 足够覆盖本项目要断言的东西。
+
+**测试替身的两条要点**：
+
+* `ResizeObserver` 必须由测试控制回调时机：jsdom 没有布局，`clientWidth` 恒为 0，
+  而组件在宽度为 0 时**故意不画**。所以 `setBox()` 会顺带触发一次观察者回调
+  （真实浏览器里这条路径由 `ResizeObserver` 走）。
+* canvas 的 2D 替身要装在 **`HTMLCanvasElement.prototype`** 上、且**在挂载前**：
+  组件在 `onMounted` 里就画第一次，挂完再注入替身看不到那一次，
+  所有绘制断言都会在"什么都没画"的前提下通过。需要验证降级路径时用
+  `restoreCanvasPrototype()` 撤掉。
+
+#### 5.13.22 时间轴改为 canvas 绘制（优化项 ⑩，**保留旧版可回滚**）
+
+**需求**："canvas 绘制时间轴，**保留旧版本以便回滚**"。
+
+| 部分 | 落点 | 说明 |
+|------|------|------|
+| 共用数值 | 🆕 `web/src/timeline.js` | 高度比例 / P95 峰值 / 焦点下标 / 概要行 / 每格宽度 / 命中测试 / 滚轮位移。**两份渲染实现共用同一份计算**，否则用户切一次渲染方式就会看到不同的数字 |
+| 共用表头 | 🆕 `web/src/components/DensityHead.vue` | 概要行 + 五个格宽档位 + 焦点/滚动提示。两份拷贝以后只会修一份 |
+| canvas 版 | 🆕 `web/src/components/DensityCanvas.vue` | 默认。只画**可视区**（可滚动时按 `scrollLeft` 裁剪）、按 `devicePixelRatio` 设后备缓冲 |
+| DOM 版 | `web/src/components/DensityDom.vue` | **原来的实现，保留**。每格一个真 `<button>`，因此天然键盘可达 |
+| 门面 | `web/src/components/DensityBar.vue` | 按偏好选实现；偏好存 `localStorage['bili-danmaku.timeline-render']`，**默认 canvas** |
+
+**回滚不是"代码还在 git 里"**：表头右侧有一个「改用 DOM / 改用 canvas」按钮，
+当场切换并记住选择。真出问题时用户一步就能退回旧版，不用等我们发版。
+
+**canvas 版的三个坑**（都在代码注释里，这里列一遍）：
+
+1. `getContext('2d')` 可能是 `null`（jsdom / 极老浏览器）—— 那时**只是不画**，
+   交互照常；直接 `ctx.clearRect` 会抛异常把整个面板带崩。
+2. 可滚动时 **canvas 不做成全内容宽**：那样画布本身会上万像素。做法是 `track`
+   撑出滚动条、canvas 只做可视区宽并 `position: sticky; left: 0` 吸附，
+   滚动时按 `scrollLeft` 重画。命中测试的 `x` 要**加上 `scrollLeft`** ——
+   这一条算错只在滚动之后复现，最难查（有用例专门钉它）。
+3. 只有 canvas 有"内容之外的空白"这个概念：点到死区**不该** emit
+   （否则点最右边会莫名跳到最后一格）。DOM 版没有死区（容器宽就是内容宽）。
+
+**验证**：
+
+* `cd web; npm test` → **101 passed**（含 28 项时间轴组件用例）；
+* `tools/verify_timeline_canvas.py` —— 真 Vue + jsdom 画一整屏，检查
+  "柱数 == 有数据的桶数""柱高随条数单调递增""最矮的非零柱不低于 4%"
+  （画布空白的失败模式能立刻抓到）。
 
 ---
 

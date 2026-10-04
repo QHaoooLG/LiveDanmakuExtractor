@@ -29,7 +29,10 @@
 | V3-b 3A | **本地感知分析**（词频/热点/刷屏/账号画像） | HANDOVER §5.11 |
 
 **当前基线**：`pytest` **900 passed, 2 deselected**，覆盖率 **90.80%**（门禁 85%）；
-前端 `cd web; npm test` **42 passed**。
+前端 `cd web; npm test` **101 passed**。
+
+> §13 交付物清单与 §14 自检表里的数字是 **V3-b 3A 那一轮的快照**（704 passed /
+> 19 前端 / 38 modules），保留作历史对照；**当前基线就是上面这两行**。
 
 > 📌 **本项目已有 git**（`main` 分支）。每个功能一个提交，提交信息用
 > `tools/commit.py`（PowerShell 5 没有 `<<<`，中文提交信息会被截断/乱码）：
@@ -386,6 +389,18 @@ docs/PRIVACY.md                       隐私说明
 - `/api/stats` 的条数/类型分布来自 **hub 内存计数**：测试要先 `hub.publish(...)`，否则是 0。
 - **`node --test` 默认会派生子进程**，在受限沙箱报 `spawn EPERM`。
   `npm test` 已固定带 `--test-isolation=none`（在当前进程内跑）—— **这不是测试写得不对**。
+- **`.vue` 组件怎么在 `node --test` 里测**（2026-10 新增）：
+  `npm test` 还带 `--import ./test/register-vue.mjs`，它登记了
+  `test/vue-loader.mjs`（用 `@vue/compiler-sfc` 以**客户端模式** `inlineTemplate` 编译），
+  所以测试文件可以直接 `import Xxx from '../src/components/Xxx.vue'`。
+  **不要**改回 Vite 的 `ssrLoadModule()` —— 那是 SSR 编译，产物里只有 `ssrRender`
+  没有 `render`，挂载时报的是完全指不到病根的
+  `TypeError: Cannot read properties of undefined (reading 'modules')`。
+  写法见 `web/test/density.test.mjs` 顶部与 `web/test/helpers/vue.mjs` 的说明：
+  `setupDom()` 必须**先**跑完，Vue 相关模块只能动态 `import()`（`@vue/runtime-dom`
+  在模块求值那一刻就抓 `document`）。组件测试**不需要** `@vue/test-utils`
+  （它依赖 Vue 内部状态，容易撞上"两份 Vue"），`helpers/vue.mjs` 里的
+  `mountComponent()` 只用公开 API。
 - **模块级缓存的坑**：`_TOP_SENDERS_CACHE` 是模块级的（必须跨请求复用），所以**会跨用例存活**。
   测试要用 `reset_top_senders_cache()` 清干净，否则"首次查询"与"命中缓存"两条路径没法分别断言。
 
@@ -494,10 +509,10 @@ $env:PYTHONIOENCODING="utf-8"
 # 1) 测试 + 覆盖率（期望：900 passed, 2 deselected，覆盖率 ~90.8%）
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term
 
-# 2) 前端逻辑用例（期望 42 passed；--test-isolation=none 是必需的，见 §7.4）
+# 2) 前端用例（期望 101 passed；--test-isolation=none 与 --import 都是必需的，见 §7.4）
 cd web; npm test; cd ..
 
-# 3) 确认前端产物是新的（当前应为 index-DYqGL4mp.js / index-CM2dI2GD.css）
+# 3) 确认前端产物是新的（当前应为 index-CPND-Vwp.js / index-CYieFQdb.css）
 Select-String -Path web\dist\index.html -Pattern "assets/index-"
 
 # 4) CLI 自检（不需要登录态）
