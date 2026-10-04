@@ -581,6 +581,13 @@ class LauncherWindow:
             hints.append("⚠ 该目录不可写，落盘会失败")
         if info.error:
             hints.append(info.error)
+        # 换过存储位置后要**一直**提醒历史浏览仍来自原目录。
+        #
+        # 为什么放在这里而不是 `choose_out_dir()` 里"说一句就完事"：`choose_out_dir`
+        # 紧接着就会触发一次占用刷新，而刷新走的 `_apply_storage` 会**清空这个标签**
+        # —— 那句提醒会在一两百毫秒后被自己抹掉。放在渲染路径上才是稳定的。
+        if self.controller.storage_switched():
+            hints.append("历史/统计仍来自原目录（换目录只影响之后的落盘）")
         self.storage_hint_label.configure(text="　".join(hints))
 
     def choose_out_dir(self) -> None:
@@ -602,7 +609,11 @@ class LauncherWindow:
             return
 
         self.refresh_storage()
-        # `set_out_dir` 的说明里已经区分了"运行中要重启才生效"，直接照搬
+        # `set_out_dir` 的说明里已经区分了"运行中要重启才生效"，直接照搬。
+        #
+        # "历史仍来自原目录"那句**不在这里写**：`refresh_storage()` 完成后
+        # `_apply_storage()` 会重设这个标签，写了也会被冲掉；那句提示由
+        # `_apply_storage()` 依据 `controller.storage_switched()` 稳定渲染。
         self.storage_hint_label.configure(text=f"{message}　已有数据未被移动或删除。")
         self.show_toast(message)
 

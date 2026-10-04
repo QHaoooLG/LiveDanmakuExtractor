@@ -31,6 +31,29 @@ const emit = defineEmits(['add', 'select', 'remove'])
 
 const draft = ref('')
 const linkDraft = ref('')
+/** 房间号输入框：空状态引导横幅的「去添加房间」会把光标送到这里 */
+const draftInput = ref(null)
+/** 直播间链接输入框（见 `focusInput`：优先把光标放这里） */
+const linkInput = ref(null)
+
+/**
+ * 把光标移到房间号输入框（供 `App.vue` 的空状态引导调用）。
+ *
+ * 优先给**链接**输入框：需求方给的用法就是"粘一条直播间链接"，粘链接比让人去
+ * 地址栏里手工挑数字省事。链接框本来也认纯数字房间号，所以这一选不限制用户。
+ *
+ * 不需要 `await nextTick()`：这两个输入框都**不是** `v-if` 出来的，DOM 一直在，
+ * 事件处理函数里直接 `focus()` 就行。
+ */
+function focusInput() {
+  const target = linkInput.value ?? draftInput.value
+  if (!target) return
+  target.focus()
+  // 已有内容时全选：用户想换房间号时直接覆盖，不用先 Ctrl+A
+  target.select()
+}
+
+defineExpose({ focusInput })
 
 const title = computed(() => {
   if (props.info?.title) return props.info.title
@@ -135,6 +158,7 @@ function roomTitle(room) {
          省掉"从地址栏里手工挑数字"这一步。 -->
     <div class="link-row">
       <input
+        ref="linkInput"
         v-model="linkDraft"
         type="text"
         placeholder="粘贴直播间链接，如 https://live.bilibili.com/8432038"
@@ -188,6 +212,7 @@ function roomTitle(room) {
     <!-- 房间号输入 + 添加（需求点 2）：datalist 给出本地记忆过的房间号 -->
     <div class="add-row">
       <input
+        ref="draftInput"
         v-model="draft"
         list="room-history"
         type="text"

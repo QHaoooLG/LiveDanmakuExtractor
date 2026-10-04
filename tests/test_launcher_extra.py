@@ -283,6 +283,48 @@ def test_set_out_dir_does_not_touch_existing_data(tmp_path: Path) -> None:
     assert list((tmp_path / "fresh").iterdir()) == [], "新目录应当是空的，不做迁移"
 
 
+def test_storage_switched_is_false_until_changed(tmp_path: Path) -> None:
+    """没换过目录时**不该**提示"历史仍来自原目录" —— 那会是无意义的噪音。"""
+    controller = _controller(tmp_path)
+    assert controller.storage_switched() is False
+    # 只是读一下当前目录不算"换过"
+    controller.current_out_dir()
+    assert controller.storage_switched() is False
+
+
+def test_storage_switched_true_after_change(tmp_path: Path) -> None:
+    """换过之后要一直为真 —— 启动面板据此**稳定**提示历史仍来自原目录。
+
+    回归背景：这条提示原来写在 `choose_out_dir()` 里"说一句就完事"，
+    但紧接着的占用刷新会重设那个标签，提示在一两百毫秒后被自己抹掉。
+    所以判断依据必须是**可反复查询的事实**，而不是写一次就丢的状态。
+    """
+    controller = _controller(tmp_path)
+    controller.set_out_dir(str(tmp_path / "elsewhere"))
+    assert controller.storage_switched() is True
+    assert controller.storage_switched() is True, "重复查询必须稳定为真"
+
+
+def test_storage_switched_accepts_equivalent_path(tmp_path: Path) -> None:
+    """换到**同一个目录**不算换（用户点错、或选了当前目录）。"""
+    controller = _controller(tmp_path)
+    controller.set_out_dir(str(tmp_path))
+    assert controller.storage_switched() is False
+
+
+def test_storage_switched_normalises_relative_paths(tmp_path: Path, monkeypatch) -> None:
+    """相对路径与绝对路径指向同一处时**不算换**。
+
+    回归背景：exe 双击启动时 `out_dir` 是默认的相对路径 `"data"`，而
+    `set_out_dir()` 存的是绝对路径。直接比字符串会把"选回当前目录"误判成
+    换过，于是面板上凭空出现一句"历史仍来自原目录"。
+    """
+    monkeypatch.chdir(tmp_path)
+    controller = PanelController(LauncherOptions(port=0, out_dir="data"))
+    controller.set_out_dir(str(tmp_path / "data"))
+    assert controller.storage_switched() is False
+
+
 def test_storage_info_follows_current_out_dir(tmp_path: Path) -> None:
     """`storage_info()` 要读**实际在用**的目录（配置优先），不是死读 options。"""
     controller = _controller(tmp_path, out_dir=str(tmp_path))

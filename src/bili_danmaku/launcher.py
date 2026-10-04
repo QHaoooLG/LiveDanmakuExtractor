@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import threading
 import time
@@ -187,6 +188,9 @@ class PanelController:
         self._panel: Any = None
         self._hub: Any = None
         self._config: Any = None
+        #: 启动时的落盘目录。用于判断"用户是不是换过存储位置" ——
+        #: 换过之后 web 面板的历史浏览**仍然来自原目录**（见 `storage_switched`）。
+        self._initial_out_dir = self.options.out_dir
         self._port = 0
         self._started_at = 0.0
         self._last_error = ""
@@ -547,6 +551,29 @@ class PanelController:
         if self._config is not None:
             configured = getattr(getattr(self._config, "sinks", None), "out_dir", None)
         return str(configured or self.options.out_dir)
+
+    def storage_switched(self) -> bool:
+        """本次会话里用户是否**换过**存储位置。
+
+        为什么需要这个：换目录只改"以后往哪写"，当前正在跑的这次仍写旧目录，
+        而且 **web 面板的「浏览历史」读的还是旧目录**（它读的是启动时那份
+        `Config`）。用户最容易的误解是"换完目录、历史也跟着换过去了"，
+        然后在面板里翻不到刚采的弹幕、以为数据丢了 —— 所以换过之后要在
+        启动面板上明说一句（见 `gui/panel_window.py::_apply_storage`）。
+
+        用"比较路径"而不是加一个布尔标志位：路径是**已有的事实**，
+        标志位是会跟现实脱节的第二份状态。
+
+        两边都做 `abspath` 再比：`options.out_dir` 可能是相对的（exe 双击启动时
+        就是默认的 `"data"`），而 `set_out_dir()` 存的是**绝对路径**。
+        不归一化的话"选回当前目录"会被误判成换过。
+        """
+        try:
+            current = os.path.abspath(self.options.out_dir)
+            initial = os.path.abspath(self._initial_out_dir)
+        except (TypeError, ValueError):  # pragma: no cover - 路径含非法字符
+            return str(self.options.out_dir) != str(self._initial_out_dir)
+        return current != initial
 
     def set_out_dir(self, path: str) -> tuple[bool, str]:
         """改落盘目录。返回 `(是否成功, 说明)`。

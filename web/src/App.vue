@@ -14,6 +14,7 @@ import {
 import AnalysisPanel from './components/AnalysisPanel.vue'
 import BookmarkBar from './components/BookmarkBar.vue'
 import DensityBar from './components/DensityBar.vue'
+import EmptyRoomsBanner from './components/EmptyRoomsBanner.vue'
 import FilterBar from './components/FilterBar.vue'
 import HealthBanner from './components/HealthBanner.vue'
 import RoomPanel from './components/RoomPanel.vue'
@@ -69,6 +70,8 @@ const analysis = ref(null)
 const liveLimit = ref(null)
 
 const streamRef = ref(null)
+/** 右侧「房间」面板：空状态引导要能把光标送到它的输入框 */
+const roomPanelRef = ref(null)
 
 function loadNumber(key, fallback) {
   const saved = Number(localStorage.getItem(key))
@@ -214,6 +217,17 @@ function showToast(message) {
  */
 function showLoginHint() {
   showToast('请在托盘图标上右键 →「显示启动面板」，在面板顶部点「扫码登录」')
+}
+
+/**
+ * 空状态横幅的「去添加房间」：把光标移到右侧的房间号输入框。
+ *
+ * 为什么不直接在横幅里放一个输入框：**同一个动作有两个输入位是坏设计** ——
+ * 用户会分不清该填哪个，代码也要维护两套提交逻辑。房间号输入框本来就紧挨着
+ * 它作用的那个列表（见 `RoomPanel.vue` 的排版说明），所以这里只负责**指过去**。
+ */
+function focusRoomInput() {
+  roomPanelRef.value?.focusInput()
 }
 
 async function refresh() {
@@ -638,6 +652,11 @@ onUnmounted(() => {
          数据搭 `/api/health` 的车，不额外轮询。 -->
     <HealthBanner :attention="health?.attention" @open-login="showLoginHint" />
 
+    <!-- 空状态引导：一个房间都没有时，告诉用户"程序没问题，只差一个房间号"。
+         放在健康横幅**之下** —— 健康横幅讲的是"已有房间出了问题"，
+         一个房间都没有时它本来就该是 ok/不显示。 -->
+    <EmptyRoomsBanner :room-count="rooms.length" @add-room="focusRoomInput" />
+
     <ScBanner :events="visible" :threshold="scThreshold" />
 
     <div class="body">
@@ -677,6 +696,7 @@ onUnmounted(() => {
       <!-- 右侧信息栏：上方是"房间"（输入/添加/切换/直播间信息），下方是统计 -->
       <aside class="side">
         <RoomPanel
+          ref="roomPanelRef"
           :current="roomId"
           :info="roomInfo"
           :rooms="rooms"
