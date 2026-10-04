@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
+import queue
 import threading
 import time
 import tkinter as tk
 import webbrowser
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 from .. import __version__
@@ -46,6 +48,8 @@ ENTRY_BG = "#2b2d31"
 OK_BG, OK_FG = "#12261a", "#3fb950"       # 已登录
 WARN_BG, WARN_FG = "#2a2411", "#e3b341"   # 未登录 / 未校验
 ALERT_BG, ALERT_FG = "#2d1416", "#f85149"  # 凭证失效（要重新扫码）
+#: 分隔线（高级设置里用）
+BORDER = "#2c313a"
 
 
 def format_uptime(seconds: float) -> str:
@@ -129,6 +133,11 @@ class LauncherWindow:
         self._login_session: Any = None
         self._logged_once = False
         self._login_checked_at = 0.0
+        #: 上一次看到的"运行中"状态（用于只在起停时刷新存储占用）
+        self._last_running: bool | None = None
+        #: 后台线程（存储扫描 / 登录检查）的结果队列，**只由主线程消费**。
+        #: 用队列而不是 `root.after`：tkinter 不是线程安全的（见 `refresh_storage`）。
+        self._bg_results: "queue.Queue[tuple[str, Any]]" = queue.Queue()
         #: tkinter 的 PhotoImage 必须留引用，否则会被 GC 掉、图片变空白
         self._qr_photo: Any = None
 
@@ -255,18 +264,24 @@ class LauncherWindow:
         self.root.after(delay_ms, lambda: self.check_login(online=True))
 
     def check_login(self, *, online: bool = True) -> None:
-        """检查登录态。`online=True` 会打一次 `nav` 接口（在后台线程里跑）。"""
+        """检查登录态。`online=True` 会打一次 `nav` 接口（在后台线程里跑）。
+
+        结果走 `_bg_results` 队列回主线程（**不用 `root.after`** —— 见
+        `refresh_storage` 的说明：从非主线程碰 tkinter 在特定时机必炸）。
+        """
         if online:
             self.login_label.configure(text="正在校验登录状态…")
 
         def worker() -> None:
             try:
-                status = self.controller.check_login() if online else self.controller.local_credential_status()
+                status = (
+                    self.controller.check_login()
+                    if online
+                    else self.controller.local_credential_status()
+                )
+                self._bg_results.put(("login", status))
             except Exception as exc:  # noqa: BLE001 - 检查失败不该崩窗口
-                from ..login import LoginStatus
-
-                status = LoginStatus(message=f"登录检查失败：{type(exc).__name__}: {exc}")
-            self.root.after(0, lambda: self._apply_login_status(status, online=online))
+                self._bg_results.put(("login_error", f"{type(exc).__name__}: {exc}"))
 
         threading.Thread(target=worker, name="login-check", daemon=True).start()
 
@@ -455,6 +470,146 @@ class LauncherWindow:
             bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w", wraplength=400,
         ).pack(fill="x")
 
+        self._build_storage(self.adv_body)
+
+    def _build_storage(self, parent: tk.Frame) -> None:
+        """存储位置：显示当前目录与占用，并可切换。
+
+        ## 语义（**改动前先读**）
+
+        **只影响之后的落盘**：已有数据不迁移、不删除；正在跑的面板也不会被重启 ——
+        所以"改了目录但当前这次仍写旧目录"，界面上必须说清楚。
+        这是刻意选的保守一侧：让用户觉得"数据丢了"比"晚一次生效"糟糕得多。
+
+        占用是**只读**统计（`launcher.scan_storage`），并且**按需刷新**：
+        扫一个 138 MB / 66 文件的目录要几十毫秒，放进 2 秒一次的 `refresh()` 里
+        纯属浪费（而且目录里可能有几十万文件）。
+        """
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(10, 8))
+
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x")
+        tk.Label(head, text="存储位置", bg=BG, fg=MUTED, font=("Microsoft YaHei UI", 9)).pack(side="left")
+        tk.Button(
+            head, text="刷新占用", command=self.refresh_storage,
+            bg=BG, fg=MUTED, activebackground=BG, activeforeground=FG,
+            relief="flat", bd=0, font=("Microsoft YaHei UI", 8), cursor="hand2",
+        ).pack(side="right")
+        tk.Button(
+            head, text="更改…", command=self.choose_out_dir,
+            bg=BG, fg=ACCENT, activebackground=BG, activeforeground=ACCENT,
+            relief="flat", bd=0, font=("Microsoft YaHei UI", 8), cursor="hand2",
+        ).pack(side="right", padx=(0, 6))
+
+        # 路径本身可点：直接打开目录（用户最常见的下一步就是"看看文件"）
+        self.storage_path_label = tk.Label(
+            parent, text="", bg=BG, fg=ACCENT, font=("Consolas", 8),
+            anchor="w", cursor="hand2", wraplength=430, justify="left",
+        )
+        self.storage_path_label.pack(fill="x", pady=(4, 0))
+        self.storage_path_label.bind("<Button-1>", lambda _event: self.open_data_dir())
+
+        self.storage_usage_label = tk.Label(
+            parent, text="统计中…", bg=BG, fg=MUTED, font=("Segoe UI", 8),
+            anchor="w", wraplength=430, justify="left",
+        )
+        self.storage_usage_label.pack(fill="x")
+
+        self.storage_hint_label = tk.Label(
+            parent, text="", bg=BG, fg=WARN_FG, font=("Segoe UI", 8),
+            anchor="w", wraplength=430, justify="left",
+        )
+        self.storage_hint_label.pack(fill="x")
+
+    def refresh_storage(self) -> None:
+        """刷新存储占用（**只读扫描**，放在后台线程里避免卡住窗口）。
+
+        结果**不用 `root.after()` 回传**：tkinter 不是线程安全的，
+        从非主线程调 `after`/改控件在"主循环没在跑"时会直接抛
+        `RuntimeError: main thread is not in main loop`（冒烟测试里实测到）。
+        统一走 `_bg_results` 队列，由主线程在 `refresh()` 里取 —— 与托盘消息泵同一思路。
+        """
+        self.storage_path_label.configure(text=self.controller.current_out_dir())
+        self.storage_usage_label.configure(text="统计中…", fg=MUTED)
+        self.storage_hint_label.configure(text="")
+
+        def worker() -> None:
+            try:
+                self._bg_results.put(("storage", self.controller.storage_info()))
+            except Exception as exc:  # noqa: BLE001 - 统计失败不该崩窗口
+                self._bg_results.put(("storage_error", f"{type(exc).__name__}: {exc}"))
+
+        threading.Thread(target=worker, name="storage-scan", daemon=True).start()
+
+    def _drain_bg_results(self) -> None:
+        """在主线程里消费后台线程的结果（**只由 `refresh()` 调用**）。"""
+        while True:
+            try:
+                kind, payload = self._bg_results.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "storage":
+                self._apply_storage(payload)
+            elif kind == "storage_error":
+                self.storage_usage_label.configure(text=f"统计失败：{payload}", fg=BAD_RED)
+            elif kind == "login":
+                self._apply_login_status(payload, online=True)
+            elif kind == "login_error":
+                from ..login import LoginStatus
+
+                self._apply_login_status(LoginStatus(message=f"登录检查失败：{payload}"), online=True)
+
+    def _apply_storage(self, info: Any) -> None:
+        """渲染占用结果。`info` 是 `launcher.StorageInfo`。"""
+        from ..launcher import format_bytes
+
+        self.storage_path_label.configure(text=str(info.path))
+        if not info.exists:
+            self.storage_usage_label.configure(text="目录还不存在（启动采集时会自动创建）", fg=MUTED)
+            return
+
+        parts = [f"共 {info.total_text} · {info.file_count} 个文件"]
+        for suffix, size in (info.by_extension or [])[:3]:
+            parts.append(f"{suffix} {format_bytes(size)}")
+        text = "　".join(parts)
+        if info.truncated:
+            text += f"（文件过多，只统计了前 {info.file_count} 个）"
+        self.storage_usage_label.configure(text=text, fg=MUTED)
+
+        hints = []
+        if not info.writable:
+            hints.append("⚠ 该目录不可写，落盘会失败")
+        if info.error:
+            hints.append(info.error)
+        self.storage_hint_label.configure(text="　".join(hints))
+
+    def choose_out_dir(self) -> None:
+        """选择新的落盘目录。**不迁移也不删除**已有数据。"""
+        from tkinter import filedialog
+
+        current = self.controller.current_out_dir()
+        chosen = filedialog.askdirectory(
+            title="选择弹幕数据的存放目录（已有数据不会被移动或删除）",
+            initialdir=current if os.path.isdir(current) else None,
+            mustexist=False,
+        )
+        if not chosen:
+            return
+
+        ok, message = self.controller.set_out_dir(chosen)
+        if not ok:
+            messagebox.showerror("无法使用该目录", message, parent=self.root)
+            return
+
+        self.refresh_storage()
+        # `set_out_dir` 的说明里已经区分了"运行中要重启才生效"，直接照搬
+        self.storage_hint_label.configure(text=f"{message}　已有数据未被移动或删除。")
+        self.show_toast(message)
+
+    def show_toast(self, message: str) -> None:
+        """在状态行短暂显示一句话（这里没有独立 toast 组件，借用状态文案）。"""
+        self.status_text.configure(text=message)
+
     def _build_footer(self, parent: tk.Frame) -> None:
         row = tk.Frame(parent, bg=BG)
         row.pack(fill="x", pady=(14, 0))
@@ -599,6 +754,9 @@ class LauncherWindow:
 
     def refresh(self) -> PanelStatus:
         """刷新界面状态；返回本次快照。"""
+        # 先把后台线程的结果收上来（存储占用 / 登录检查）
+        self._drain_bg_results()
+
         status = self.controller.status()
         text, color = describe_status(status)
         self.status_dot.configure(fg=color)
@@ -639,6 +797,13 @@ class LauncherWindow:
             self.check_login(online=True)
         else:
             self.maybe_recheck_login()
+
+        # 存储占用**不进 `refresh()` 的常规路径**：扫 138 MB / 66 文件要几十毫秒，
+        # 目录里可能有几十万文件，2 秒一次纯属浪费。只在采集起停时刷一次
+        # （起停才会改变目录内容），另外用户可以手动点「刷新占用」。
+        if status.running != self._last_running:
+            self._last_running = status.running
+            self.refresh_storage()
         return status
 
     def schedule_refresh(self) -> None:

@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .login import LoginStatus, QrLoginSession, check_status, local_status
@@ -54,6 +55,100 @@ class LauncherOptions:
     #: 日志文件路径。留空时**自动**判断：冻结运行（exe）或没有可用 stderr 时
     #: 落到 `.runtime/web.log`（见 `PanelController._default_log_file`）。
     log_file: str = ""
+
+
+@dataclass
+class StorageInfo:
+    """落盘目录的**只读**占用快照（启动面板用它展示"数据放哪、占了多少"）。"""
+
+    path: str = ""
+    exists: bool = False
+    #: 该目录（不含子目录）下所有文件的总字节数
+    total_bytes: int = 0
+    file_count: int = 0
+    #: 按后缀汇总（`.db` / `.jsonl` / `.csv` …），按占用降序
+    by_extension: list[tuple[str, int]] = field(default_factory=list)
+    #: 扫描时是否被截断（目录超大时不拖死界面）
+    truncated: bool = False
+    writable: bool = False
+    error: str = ""
+
+    @property
+    def total_text(self) -> str:
+        return format_bytes(self.total_bytes)
+
+
+def format_bytes(size: int) -> str:
+    """人类可读的字节数（`0 B` / `12.3 KB` / `1.5 MB` / `2.1 GB`）。"""
+    value = float(max(int(size), 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
+
+
+#: 占用扫描的文件数上限。目录里有几十万个文件时，全量遍历会让面板卡住；
+#: 到上限就停下并把 `truncated` 标出来（**不静默**给出偏小的数字）。
+DISK_SCAN_LIMIT = 20000
+
+
+def scan_storage(path: str | Path, *, limit: int = DISK_SCAN_LIMIT) -> StorageInfo:
+    """统计某个目录的占用（**只读**，不创建、不删除、不改动任何文件）。
+
+    为什么只统计**顶层文件**（不递归）：本项目的落盘结构是扁平的
+    （`{out_dir}/danmaku.db`、`{out_dir}/804456_20261001-22.jsonl`…），
+    递归反而会把用户误放到里面的整个目录树都算进来。
+    但为了不给出"看起来很小"的假象，遇到子目录时会**如实报告**一句。
+
+    `writable` 用"能否创建临时文件"实测，而不是看权限位 —— Windows 上两者经常不一致。
+    """
+    target = Path(path)
+    info = StorageInfo(path=str(target))
+    if not target.is_dir():
+        info.error = "目录不存在"
+        return info
+
+    info.exists = True
+    info.writable = _is_writable(target)
+
+    total = 0
+    count = 0
+    by_ext: dict[str, int] = {}
+    try:
+        for entry in target.iterdir():
+            if not entry.is_file():
+                continue
+            if count >= max(int(limit), 1):
+                info.truncated = True
+                break
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue  # 文件刚好被删/被独占：跳过这一个，不要让整次统计失败
+            total += size
+            count += 1
+            suffix = entry.suffix.lower() or "（无后缀）"
+            by_ext[suffix] = by_ext.get(suffix, 0) + size
+    except OSError as exc:
+        info.error = f"无法读取目录：{type(exc).__name__}: {exc}"
+
+    info.total_bytes = total
+    info.file_count = count
+    info.by_extension = sorted(by_ext.items(), key=lambda kv: -kv[1])
+    return info
+
+
+def _is_writable(path: Path) -> bool:
+    probe = path / ".write-probe.tmp"
+    try:
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
 
 
 @dataclass
@@ -432,6 +527,65 @@ class PanelController:
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"
         return True, str(getattr(runtime, "room_id", runtime))
+
+    # ------------------------------------------------------------------ #
+    # 存储位置
+    # ------------------------------------------------------------------ #
+
+    def storage_info(self) -> StorageInfo:
+        """当前**落盘目录**的占用（只读）。
+
+        目录来源：`self.options.out_dir`。注意它可能被配置文件的
+        `sinks.out_dir` 覆盖过 —— 面板启动后以 `self._config` 为准，
+        否则界面上显示的目录与实际写盘的位置会对不上。
+        """
+        return scan_storage(self.current_out_dir())
+
+    def current_out_dir(self) -> str:
+        """**实际**在用的落盘目录（配置优先于选项）。"""
+        configured = None
+        if self._config is not None:
+            configured = getattr(getattr(self._config, "sinks", None), "out_dir", None)
+        return str(configured or self.options.out_dir)
+
+    def set_out_dir(self, path: str) -> tuple[bool, str]:
+        """改落盘目录。返回 `(是否成功, 说明)`。
+
+        ## 语义（**刻意选保守的一侧**）
+
+        只影响**之后**的落盘：正在跑的面板不会被重启，已有数据**不迁移、不删除**。
+        所以如果面板此刻正在运行，新目录要**重启采集之后**才生效 ——
+        这一点必须如实告诉用户（悄悄"改成功了但没生效"是最糟的体验）。
+
+        ## 为什么直接改 `self.options`
+
+        `_build_config()` 每次都用 `self.options.out_dir` 重新组装 `Config`，
+        所以改这里 + 下次 `start()` 就会落到新目录，不需要额外的状态。
+        """
+        text = str(path or "").strip()
+        if not text:
+            return False, "目录不能为空"
+
+        target = Path(text).expanduser()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return False, f"无法创建/访问该目录：{type(exc).__name__}: {exc}"
+
+        if not _is_writable(target):
+            return False, "该目录不可写，请换一个位置"
+
+        self.options.out_dir = str(target)
+        # 配置已经建过的话要一起改，否则 `current_out_dir()` 仍报旧值
+        if self._config is not None:
+            try:
+                self._config.sinks.out_dir = target
+            except Exception:  # noqa: BLE001 - 配置对象可能被冻结成不可变
+                log.debug("无法就地更新 config.sinks.out_dir，下次启动会重建")
+
+        if self.is_running():
+            return True, f"已改为 {target}；**重启采集后生效**（当前这次仍写入原目录）"
+        return True, f"已改为 {target}"
 
     # ------------------------------------------------------------------ #
     # 凭据

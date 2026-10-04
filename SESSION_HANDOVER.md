@@ -28,8 +28,18 @@
 | V3-a/a2/a3 | 历史浏览（游标分页）、标记/区间导出、链接解析与交互修正 | HANDOVER §5.8–5.10 |
 | V3-b 3A | **本地感知分析**（词频/热点/刷屏/账号画像） | HANDOVER §5.11 |
 
-**当前基线**：`pytest` **820 passed, 2 deselected**，覆盖率 **90.29%**（门禁 85%）；
+**当前基线**：`pytest` **892 passed, 2 deselected**，覆盖率 **90.69%**（门禁 85%）；
 前端 `cd web; npm test` **37 passed**。
+
+> 📌 **本项目已有 git**（`main` 分支）。每个功能一个提交，提交信息用
+> `tools/commit.py`（PowerShell 5 没有 `<<<`，中文提交信息会被截断/乱码）：
+>
+> ```powershell
+> .\.venv\Scripts\python.exe tools\commit.py --dry-run          # 先看要提交什么
+> .\.venv\Scripts\python.exe tools\commit.py -m build/msg.txt   # 提交（消息写成 UTF-8 文件）
+> ```
+>
+> **每完成一项都要提交**（需求方 2026-10-04 明确要求）。
 
 > ✅ **上一轮的三条"坏消息"都已修复/落地，别再照旧文档走**：
 > * **pip 已可用**（旧说"pip 完全不可用"）→ 根因是注册表系统代理 + venv 老 pip，
@@ -481,7 +491,7 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m pip --version      # 期望 26.x（22.3.1 就会出 SSL 怪错）
 .\.venv\Scripts\python.exe -m pip download six --no-deps -d build\pipprobe
 
-# 1) 测试 + 覆盖率（期望：820 passed, 2 deselected，覆盖率 ~90.3%）
+# 1) 测试 + 覆盖率（期望：892 passed, 2 deselected，覆盖率 ~90.7%）
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term
 
 # 2) 前端逻辑用例（期望 19 passed；--test-isolation=none 是必需的，见 §7.4）
@@ -537,6 +547,7 @@ test_rooms.py 27   | test_runtime.py 30      | test_sc.py 28 | test_server.py 39
 test_server_sqlite.py 47 | test_sinks.py 13  | test_sinks_m2.py 22 | test_stats_export_api.py 9
 test_store.py 18   | test_store_extra.py 12  | test_analysis_words.py 14 | test_export_stats.py 13
 test_text.py 44    | test_utils.py 5         | test_wbi.py 9     | test_login.py 25
+test_login_module.py 26 | test_launcher_extra.py 29 | test_health_attention.py 19
 ```
 
 ---
