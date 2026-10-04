@@ -71,15 +71,21 @@ web/
                                  会话/时间轴状态机（纯逻辑，有离线用例）
     components/
       TopBar.vue                 顶栏：品牌、连接状态、**类型多选（TypeSelector）**、关键词（高亮/过滤）、
-                                 SC 阈值、已接收、已运行（呼吸灯）、导出、停止面板
+                                 SC 阈值、已接收、已运行（呼吸灯）、原始导出、**统计数据导出（优先 xlsx）**、停止面板
       TypeSelector.vue           自绘类型多选：收起态摘要+色块；展开态复选框+每类型条数（全选/清空）
-      FilterBar.vue              上下文条：统计口径 + **历史浏览控件（进入/更早/更新/回到实时/会话）** + 过滤状态
+      FilterBar.vue              上下文条：统计口径 + **历史浏览控件（进入/更早/更新/回到实时/会话）** +
+                                 **匿名昵称**开关 + 过滤状态
       StreamList.vue             弹幕流：贴底自动滚动、**顶部触发加载更早并补偿 scrollTop**、
                                  关键词分段高亮、表情图片（历史条目读顶层 `emots`）、
-                                 每行 **★ 打标记**（已标记的行高亮）、
-                                 **每行默认显示发送者 uid**（流顶部开关可隐藏，选择存 localStorage）
-      DensityBar.vue             **时间轴密度条（V3-a）**：点桶跳转、当前窗口高亮、P95 归一化、
-                                 每格时长 1/3/5/10/15 分钟（桶数极多时压缩格子，避免溢出面板）
+                                 每行 **★ 打标记**（已标记的行高亮）、昵称可按开关打码
+      DensityBar.vue             **时间轴门面**：按偏好把绘制交给 canvas 版或 DOM 版，
+                                 并给出「改用 DOM / 改用 canvas」的**当场回滚**入口
+      DensityCanvas.vue          **时间轴 canvas 版（默认，优化项 ⑩）**：只画可视区、按 DPR 设后备缓冲、
+                                 按 `scrollLeft` 裁剪重画；拿不到 2d 上下文时只是不画（不崩）
+      DensityDom.vue             **时间轴 DOM 版（保留作回滚）**：每格一个真 `<button>`，天然键盘可达
+      DensityHead.vue            时间轴表头（两版共用）：概要行 + 每格时长档位 + 焦点/滚动提示
+      EmptyRoomsBanner.vue       空状态引导：一个房间都没有时说明"程序正常，只差一个房间号"
+      HealthBanner.vue           采集健康横幅：凭证失效/重连异常时给出可照做的下一步
       BookmarkBar.vue            **标记条（V3-a2）**：打标记 / 跳到标记 / 选为导出起点 /
                                  按标记区间导出 / 删除 / 清空（放在时间轴下方，与密度条同一套时间语义）
       ScBanner.vue               高额 SC 横幅（阈值可调，按条依次展示）
@@ -89,11 +95,33 @@ web/
       TypeBars.vue               类型分布横向柱状图：条长=占比、条数在右、每类型一色、底部合计
       AnalysisPanel.vue          **感知分析（V3-b 3A）**：实时词频 / 热点突增 / 疑似刷屏 /
                                  疑似异常账号（可折叠；**点词 → 只看含该词的弹幕**）
+    base64.js                    base64 → 字节（统计数据导出的 xlsx 走它）；抽出来是为了**能单独测**
+    timeline.js                  **时间轴共用计算**：P95 峰值 / 高度比例 / 焦点格下标 / 概要行 /
+                                 每格宽度（三档缩放）/ 命中测试 / 滚轮位移。canvas 版与 DOM 版共用，
+                                 否则切一次渲染方式就会看到不同的数字
   test/
-    history.test.mjs             **前端逻辑用例（22 项）**：游标翻页/去重/截断/合并/会话状态机
+    history.test.mjs             **前端逻辑用例**：游标翻页/去重/截断/合并/会话状态机
                                  + 标记增删/时间排序/选中态/anchor_id + jumpTo 的 off-by-one 回归
-                                 + uid 显示偏好（默认显示、关掉后记在本地、storage 不可用时退回默认）
+                                 + 匿名昵称偏好 + 导出文件名/当天编号
+    timeline.test.mjs            **时间轴纯计算用例（31 项）**：P95 归一化、焦点格区间判定、
+                                 三档缩放、命中测试边界、滚轮到两端放行
+    density.test.mjs             **时间轴组件用例（28 项）**：真挂载后断言绘制记录（柱数/柱高/焦点色）、
+                                 点击与滚轮行为、拿不到 2d 上下文时不崩、
+                                 以及**两版渲染的文案与悬停提示必须一字不差**
+    base64.test.mjs              base64 → 字节（xlsx 是 zip，高位字节不能被截断）
+    vue-loader.mjs               **把 `.vue` 编成客户端组件**给 `node --test` 用
+                                 （`@vue/compiler-sfc` + `inlineTemplate`）
+    register-vue.mjs             `npm test` 通过 `--import` 登记上面的 loader
+    helpers/vue.mjs              组件测试脚手架：jsdom、`mountComponent()`（只用公开 API）、
+                                 canvas 2D 替身、`ResizeObserver` 触发器、`setBox()`
 ```
+
+> **组件测试为什么不用现成工具**（改之前先读）：`@vue/test-utils` 的 `mount()`
+> 依赖 Vue **内部**的 `currentInstance`，而测试进程必须先装 jsdom 才能 import Vue
+> （`@vue/runtime-dom` 在模块求值那一刻就抓 `document`）—— 两边解析路径一旦不同
+> 就会出现"两份 Vue"。所以 `helpers/vue.mjs` 只用公开 API 写了约 60 行 wrapper。
+> 也**不要**用 Vite 的 `ssrLoadModule()` 编 `.vue`：那是 SSR 编译，产物只有
+> `ssrRender` 没有 `render`，挂载时报的是完全指不到病根的 `reading 'modules'`。
 
 > **顶栏 vs 右栏 vs 上下文条的分工（别再混）**：
 > 顶栏 = **跨面板的过滤与操作**（类型/关键词/SC 阈值/导出/停止）；
@@ -125,6 +153,7 @@ FastAPI /api/history ──► useHistory.js ──► merged（按 id 去重、
 /api/room-info ──────► App.vue ──► RoomPanel（**只输入、未监控**的房间号也先显示「XXX 的直播间」）
 /api/history ────────► useHistory.js ──► StreamList（**瘦投影**，游标翻页）
 /api/density ────────► useHistory.js ──► DensityBar（服务端 SQL 聚合）
+                                            └─ canvas 版 / DOM 版，偏好存 localStorage
 /api/sessions ───────► App.vue ──► FilterBar（"只看某次抓取"下拉）
 /api/annotations ────► useHistory.js ──► BookmarkBar + StreamList 的 ★（标记存**独立库**）
 /api/annotations/export ◄── BookmarkBar「导出该区间」（按标记区间流式导出）
@@ -132,20 +161,22 @@ FastAPI /api/history ──► useHistory.js ──► merged（按 id 去重、
                                    └─ 点词 → keyword + 模式切「过滤」（复用顶栏过滤，不另造状态）
 POST /api/admin/shutdown ◄── TopBar「停止面板」（仅本机可用）
 localStorage ────────► App.vue ──► RoomPanel（房间号历史 datalist）/ TopBar（SC 阈值、关键词模式）
-                            └──────► StreamList（显示 uid 开关，键在 preferences.js）
+                            └──────► StreamList（匿名昵称开关，键在 preferences.js）
+                            └──────► DensityBar（时间轴渲染方式 canvas/dom，键 bili-danmaku.timeline-render）
 ```
 
-### 测试（V3-a 起有前端用例了）
+### 测试
 
 ```powershell
 cd web
-npm test        # node --test --test-isolation=none test/history.test.mjs
+npm test        # node --import ./test/register-vue.mjs --test --test-isolation=none "test/**/*.test.mjs"
 ```
 
-**为什么是 `node:test` 而不是 Vitest**：这一层要验证的是**纯数据流逻辑**
-（游标翻页、去重、截断、合并、会话状态机、标记增删），用 Node 内置测试运行器 + 已装的 `vue` 就够了，
-**零新依赖**（不必动 `package.json` 的 devDependencies，也绕开了镜像/缓存那两个坑）。
-需要组件级交互（点击、渲染）时再评估是否引入 `@vue/test-utils`。
+**为什么是 `node:test` 而不是 Vitest**：这一层要验证的多数是**纯数据流逻辑**
+（游标翻页、去重、截断、合并、会话状态机、标记增删、时间轴计算），用 Node 内置测试运行器就够了，
+不必再引一套测试框架。组件级用例（点击、绘制、渲染）现在也跑在同一套里 ——
+靠 `test/vue-loader.mjs` 把 `.vue` 编成客户端组件，**唯一新增的 devDependency 是 `jsdom`**
+（它只提供 `document`，不提供测试 API）。
 
 > ⚠️ 受限沙箱里 `node --test` 默认会**派生子进程**而失败（`spawn EPERM`），
 > 所以 `npm test` 固定带 `--test-isolation=none`（在当前进程内跑）。这不是测试写得不对。
@@ -317,14 +348,22 @@ WS 消息类型（`payload.t`）：
 
 ### V3-a 复盘器（历史浏览）手测
 
-16. 底部**时间轴**有内容：显示 `起 → 止 · 每格 N 分钟 · N 格 · 共 M 条 · 平均 x 条/格`，
+16. 底部**时间轴**有内容：显示 `起 → 止 · 每格 N 分钟 · 共 M 条`，
     柱子高低与热闹程度一致。
 17. **点时间轴某一格**：**高亮的必须就是你点的那一格**（不是前一格！），
     弹幕流跳到那段时间，顶部出现"历史浏览中 · N 条"与「回到实时」。
     换几个位置多试几次（尤其前几格与最后几格）。
 18. **时间轴粒度**：点「1 分钟 / 3 分钟 / 5 分钟 / 10 分钟 / 15 分钟」→ 格子数量与宽度立刻变化，
-    摘要行的"每格/格数/平均条数"同步更新；切粒度后**再点某格**，高亮仍然准确。
-    切到 1 分钟且库跨度很大时，格子会被压扁但**不许溢出到右栏**（见 `DensityBar` 的 `dense`）。
+    摘要行的"每格"同步更新；切粒度后**再点某格**，高亮仍然准确。
+    切到 1 分钟且库跨度很大时，格子会被压扁但**不许溢出到右栏**。
+18b. **时间轴渲染方式可当场回滚**（优化项 ⑩）：表头右侧点「改用 DOM」→
+    时间轴立刻变成原来的按钮式（点格子跳转、悬停提示都要照常），**刷新页面后仍是 DOM**；
+    再点「改用 canvas」切回。两个渲染方式下：**概要行文字、每格悬停提示、点格跳转
+    的时间点必须完全一致**（这是"两版共用 `timeline.js`"的意义）。
+18c. **时间轴横向滚动**（库跨度大、格数 > 600 时出现）：鼠标停在时间轴上滚轮即可左右滑动；
+    滚到两端时**不应把页面卡住**（此时滚轮应该去滚页面）。
+18d. **高分屏不糊**：在 125%/150% 缩放的屏幕上，canvas 时间轴的柱子边缘应当清晰
+    （后备缓冲按 `devicePixelRatio` 放大）。这一条只能人工看。
 19. 点「浏览历史」→ 加载最新一页；**滚到最顶**会自动继续加载更早的，
     并且**视口停在原处**（不会被弹走）—— 这是最容易做错的一条，务必手动确认。
 20. 顶栏**没有**「↑更早 / ↓更新」按钮（已按反馈删除）；「回到实时」工作正常。

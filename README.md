@@ -296,7 +296,7 @@ src/bili_danmaku/
   server/          hub.py（广播中枢）/ panel.py（多房间）/ app.py（FastAPI）
   cli.py           命令行入口（11 个子命令）
 web/               Vite + Vue 3 面板前端（组件化，构建产物 dist/；开发与构建细节见 web/README.md）
-web/test/          前端逻辑用例（node:test，零新依赖）：`cd web; npm test`
+web/test/          前端用例（node:test；纯逻辑 + **组件级**）：`cd web; npm test`
 tools/
   preflight.py       依赖 + 连通性 + 风控探测
   handshake_check.py 协议握手实测与样本抓取
