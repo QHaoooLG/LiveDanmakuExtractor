@@ -440,7 +440,7 @@ bili-danmaku/
 │  ├─ gui/               Windows 侧托盘与原生窗口（ctypes，零额外依赖）
 │  └─ cli.py             命令行入口
 ├─ web/                  Vite + Vue 3 面板前端
-│  └─ src/               App.vue + 22 个组件 + composables（构建产物 dist/ 由后端托管）
+│  └─ src/               App.vue + 16 个组件 + 2 个 composable（构建产物 dist/ 由后端托管）
 ├─ tools/                打包、压测、诊断脚本（手动运行，不参与运行时）
 ├─ assets/               app.ico（exe 与托盘共用，由 tools/make_icon.py 生成）
 └─ pics/                 图标与形象源图
