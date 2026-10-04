@@ -523,6 +523,13 @@ Select-String -Path web\dist\index.html -Pattern "assets/index-"
 # 4b) 面板自检（前端定位 + 本进程起停 + 首页可访问；打包后必跑）
 .\.venv\Scripts\bili-danmaku.exe verify
 
+# 4b2) 时间轴的两种验证（都不需要真实桌面）
+.\.venv\Scripts\python.exe tools\verify_empty_rooms.py       # 空房间引导（真 Vue SSR）
+.\.venv\Scripts\python.exe tools\verify_timeline_canvas.py   # 真 Vue + jsdom：柱数/柱高/表头
+#   下面这个需要面板已在跑（例如 exe web --port 8795）+ 本机装有 Chrome/Edge：
+#   .\.venv\Scripts\python.exe tools\verify_canvas_pixels.py --port 8795
+#   它用 headless Chromium 读回**真像素** —— jsdom 只能证明"调了哪些绘制指令"。
+
 # 4c) exe 打包 + 冻结自检（约 30s；必须看到 served_real_frontend: True）
 .\.venv\Scripts\python.exe tools\make_icon.py
 .\.venv\Scripts\python.exe tools\build_exe.py

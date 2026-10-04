@@ -1368,7 +1368,18 @@ exe **没有 stderr**（`sys.stderr is None`）⇒ 日志**全部丢弃**。托�
 * `cd web; npm test` → **101 passed**（含 28 项时间轴组件用例）；
 * `tools/verify_timeline_canvas.py` —— 真 Vue + jsdom 画一整屏，检查
   "柱数 == 有数据的桶数""柱高随条数单调递增""最矮的非零柱不低于 4%"
-  （画布空白的失败模式能立刻抓到）。
+  （画布空白的失败模式能立刻抓到）；
+* `tools/verify_canvas_pixels.py` —— 真 Chromium（headless + CDP）读回**真像素**。
+  jsdom 没有光栅化，前两步只能证明"我们**调用**了哪些绘制指令"，
+  而"指令调了、画布却是白的"是另一类失败（尺寸算错、被 CSS 盖住）。
+  判定刻意做成双向可证伪：画三条已知颜色的线 → 不同颜色数 ≥ 3；
+  **清空之后**必须是 1 种。**不要**改成"看有没有深色像素"——canvas 的透明区域
+  在截图里就是深色背景，那种判据永远为真。
+  > ⚠️ 这个脚本用 Python 起一个 `node -e` 子进程来发 CDP 消息（借 Node 24 自带的
+  > `WebSocket`，免得多引一个依赖）。两条踩过的坑写在代码注释里：① node 侧必须打
+  > **真换行**才能让 Python 的 `splitlines()` 切出行来（Python 源码里写 `\\n`
+  > 会变成字面量 `\n`，报 `Extra data`）；② 打完要立刻 `process.exit(0)`，
+  > 否则兜底的 `setTimeout` 会再打一行 `ERR timeout` 混进 stdout。
 
 ---
 
