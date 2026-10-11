@@ -53,8 +53,8 @@
 需要 **Python 3.10+**。
 
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd bili-danmaku
+git clone https://github.com/QHaoooLG/LiveDanmakuExtractor.git
+cd LiveDanmakuExtractor
 
 python -m venv .venv
 # Windows:      .\.venv\Scripts\Activate.ps1
@@ -62,6 +62,26 @@ python -m venv .venv
 
 pip install -e .
 ```
+
+> **注意：以上命令都在仓库根目录执行。**
+> 本项目采用 `src/` 布局，`pyproject.toml` 只存在于仓库根，
+> 而 `src/bili_danmaku/` 是被安装的包本身、下面并没有 `pyproject.toml`。
+> 如果你进到了 `src/bili_danmaku`，`pip install -e .` 会报
+> `does not appear to be a Python project`。
+>
+> 站错目录时，先退回来确认根目录里有 `pyproject.toml`：
+>
+> ```bash
+> pwd && ls pyproject.toml
+> ```
+>
+> 另外，`python -m venv .venv` 只是**创建**虚拟环境、并不会激活它。
+> 若激活脚本被系统策略拦下，也可以直接用 venv 内的解释器、完全跳过激活：
+>
+> ```bash
+> .venv\Scripts\python.exe -m pip install -e .       # Windows
+> .venv/bin/python -m pip install -e .               # macOS/Linux
+> ```
 
 ### 构建 Web 面板（可选）
 
