@@ -10,10 +10,27 @@
  */
 import { onUnmounted, ref, shallowRef } from 'vue'
 
+import { createLiveBuffer } from '../liveBuffer.js'
+
 const MAX_EVENTS = 2000
 const MAX_ERRORS = 5
 const BASE_RETRY_MS = 800
 const MAX_RETRY_MS = 15000
+
+/**
+ * 实时事件的**合并发布间隔**（毫秒）。
+ *
+ * 为什么需要它：`events` 是 `shallowRef`，而 `App.vue` 里有一串基于它的
+ * `computed`（`allEvents` / `availableTypes` / `typeCounts` / `scoped`…），
+ * 每次换数组都会让它们**整体重算**。原实现是"来一条就换一次数组"
+ * （`concat` + `slice` 两次 2000 槽拷贝），于是每条弹幕都要付一次全链路重算。
+ *
+ * 合并成最多 10 次/秒之后：**渲染内容不变**（界面上 100 ms 内到的事件
+ * 本来就画在同一帧里），但下游重算次数降到 1/10 以下。
+ *
+ * 缓冲逻辑本身在 `liveBuffer.js` 里（纯函数、可单独测）。
+ */
+const FLUSH_INTERVAL_MS = 100
 
 export function useLiveStream(roomIdRef) {
   const connected = ref(false)
@@ -22,8 +39,15 @@ export function useLiveStream(roomIdRef) {
   const events = shallowRef([])
   const errors = shallowRef([])
   const received = ref(0)
-  /** 当前缓冲上限（默认 MAX_EVENTS，历史浏览时会被调小） */
-  let limit = MAX_EVENTS
+
+  //: 事件缓冲（合并发布 + 就地裁剪），逻辑见 `liveBuffer.js`
+  const buffer = createLiveBuffer({
+    limit: MAX_EVENTS,
+    intervalMs: FLUSH_INTERVAL_MS,
+    publish: (next) => {
+      events.value = next
+    },
+  })
 
   let socket = null
   let retryTimer = null
@@ -35,9 +59,7 @@ export function useLiveStream(roomIdRef) {
    * 传 `undefined` 恢复默认。
    */
   function setLimit(next) {
-    limit = typeof next === 'number' && next > 0 ? Math.floor(next) : MAX_EVENTS
-    const current = events.value
-    if (current.length > limit) events.value = current.slice(current.length - limit)
+    buffer.setLimit(next)
   }
 
   function pushError(message) {
@@ -58,11 +80,9 @@ export function useLiveStream(roomIdRef) {
         break
       case 'event': {
         received.value += 1
-        const next = events.value.concat(payload.data)
-        events.value = next.length > limit ? next.slice(next.length - limit) : next
+        buffer.push(payload.data)
         break
-      }
-      case 'error':
+      }      case 'error':
         pushError(payload.data?.hint ?? payload.data?.code ?? '未知错误')
         break
       default:
@@ -108,8 +128,8 @@ export function useLiveStream(roomIdRef) {
   /** 切换房间时调用：清空缓冲并重连（历史回填按房间取）。 */
   function reconnect() {
     clearTimeout(retryTimer)
+    buffer.clear()
     retryCount = 0
-    events.value = []
     received.value = 0
     if (socket) {
       socket.onclose = null
@@ -119,7 +139,7 @@ export function useLiveStream(roomIdRef) {
   }
 
   function clear() {
-    events.value = []
+    buffer.clear()
     received.value = 0
   }
 
@@ -128,6 +148,7 @@ export function useLiveStream(roomIdRef) {
   onUnmounted(() => {
     disposed = true
     clearTimeout(retryTimer)
+    buffer.dispose()
     if (socket) {
       socket.onclose = null
       socket.close()

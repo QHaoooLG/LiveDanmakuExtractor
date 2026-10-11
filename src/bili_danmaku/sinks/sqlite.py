@@ -92,6 +92,71 @@ CREATE INDEX IF NOT EXISTS idx_event_room_ts_type ON event(room_id, recv_ts, typ
 -- `idx_event_uid` 保留：它与本索引前缀重复，但删它要走 ALTER/DROP 迁移，
 -- 收益只是几十 KB 空间，不值得在"自愈路径"之外多开一条迁移。
 CREATE INDEX IF NOT EXISTS idx_event_uid_uname ON event(uid, uname);
+
+-- 2026-10-11：`room_anchor_names()`（`/api/room-names`，房间下拉列表的"曾采集"昵称）用。
+--
+-- 它的语句是 `SELECT room_id, uname, COUNT(*) AS n FROM event
+-- WHERE room_id IN (…) AND uname IS NOT NULL AND uname != ''
+-- GROUP BY room_id, uname ORDER BY n DESC, uname ASC`
+-- —— 与上面 `idx_event_uid_uname` 是**同一种病**：分组键里有 `uname`，
+-- 而当时所有索引都不含它，于是每一行都要**回表**取 uname 再做分组。
+--
+-- 实测（库 1.6 GB / 383,248 行 / schema v3，
+-- 临时副本上跑所以是**冷页缓存**口径，只看相对倍数）：
+--
+--   | 写法 | 耗时 | 返回值与改前一致 |
+--   |---|---|---|
+--   | 改前（回表 + GROUP BY 临时树） | **8061 ms** | — |
+--   | **本索引（覆盖索引，免回表）** | **68 ms** | ✅ 逐字一致 |
+--   | 窗口函数 `ROW_NUMBER()` | 109 ms | ✅ 但 SQL 复杂得多，不值得 |
+--   | `MAX(uname)` 改写 | 112 ms | ❌ 少一个房间（语义错） |
+--   | 按 `(room_id, uname)` 序流式取第一组 | 97 ms | ❌ 并列时取值变了 |
+--   | Python 侧流式计数 | 370 ms | ✅ 不用 SQL 聚合反而更慢 |
+--   | 限定"最近 N 条"再聚合 | 40~389 ms | ❌ 换了统计口径 |
+--
+-- 生产热态口径：改前稳定 **1.2 s**，且它是**用户点开
+-- 房间下拉框**这条交互路径上的调用 ⇒ 值得消掉。**注意本轮只加索引、不改 SQL**：
+-- 上面四种"看起来更快"的改写都有语义代价，实测数据把它们全部否掉了。
+--
+-- 为什么用新索引名：`CREATE INDEX IF NOT EXISTS` 对已存在的**同名**索引不会重建
+-- ⇒ 老库永远拿不到升级；新名字才能靠"每次 `open()` 都跑一遍 SCHEMA"这条自愈机制补上
+-- （与 `idx_event_room_ts_type`、`idx_event_uid_uname` 同理）。
+--
+-- 那个**一次性代价**（实测）：
+--   * 索引本身占 **9.9 MB**（page_count 差值法）；
+--   * 老库首次 `open()` 会在 `executescript(SCHEMA)` 里真的建一次索引，实测
+--     **2.3 s（空闲、页缓存热）~ 15.8 s（并发压测、页缓存冷）** —— 这台
+--     库 1.6 GB / 383,248 行，**随库大小缩放**；新建库/小库/已带索引的库都是 **8 ms**；
+--   * 它发生在 **`sink.open()`**（= 添加房间/开始采集那一刻），**不是**面板启动路径
+--     —— 启动时还没有采集器，所以两种库的面板 `/api/health` 就绪都是 **1.56 s**。
+--   ⚠️ 这一项**只影响老库的第一次采样**，不会随会话数累积（之后每次开库都是 8 ms）。
+CREATE INDEX IF NOT EXISTS idx_event_room_uname ON event(room_id, uname);
+
+-- P0-3：消除"把整个结果集物化到临时 B 树"的两类查询。
+--
+-- 此前所有索引的最左列都是 room_id / type / uid，于是**只按时间窗口**过滤的查询
+-- （面板默认"全部房间"、历史翻页不带 room_id、时间轴密度）只能全表扫 + 临时 B 树排序。
+-- 用 `EXPLAIN QUERY PLAN` 实测（2 万行）：
+--
+--   | 查询 | 加索引前 | 加索引后 |
+--   |---|---|---|
+--   | `… WHERE recv_ts >= ? ORDER BY recv_ts DESC, id DESC` | 全扫 + `USE TEMP B-TREE FOR ORDER BY` | `SEARCH … USING COVERING INDEX idx_event_ts (recv_ts>?)`（**无临时树**）|
+--
+-- `idx_event_ts` 把 `id` 也放进索引，正是为了同时满足 `ORDER BY recv_ts DESC, id DESC`
+-- 这条"历史翻页"的排序（纯 `(recv_ts)` 仍会退化成临时树）。
+CREATE INDEX IF NOT EXISTS idx_event_ts ON event(recv_ts, id);
+
+-- `latency_percentiles`（`/api/stats` **每 3 秒跑两次**：P50/P95）的语句是
+-- `ORDER BY latency_ms LIMIT 1 OFFSET n`，之前完全没有可用索引
+-- ⇒ `SCAN event` + `USE TEMP B-TREE FOR ORDER BY`，临时树要装下**整个结果集**的排序键
+-- （20 万行就是几 MB，超出 page cache 还会落盘）。
+--
+-- ⚠️ 索引形状是实测挑的，**不是** `(recv_ts, latency_ms)`：
+-- 实测对比了 6 种形状 × 3 种过滤组合，
+-- **只有单列 `(latency_ms)` 在"无过滤 / 带 recv_ts 窗口 / 带 room_id+recv_ts"三种情况下
+-- 都不需要临时 B 树**；`(recv_ts, latency_ms)` 只在无过滤时有效，
+-- 一带 `recv_ts` 窗口就退化（因为它的第一列是 `recv_ts`，喂不了 `ORDER BY latency_ms`）。
+CREATE INDEX IF NOT EXISTS idx_event_latency ON event(latency_ms);
 """
 
 #: 旧库升级：新增列只能靠 ALTER TABLE（`CREATE TABLE IF NOT EXISTS` 对已存在的表无效）。
@@ -115,6 +180,8 @@ INSERT OR IGNORE INTO event (
 
 class SqliteSink(Sink):
     name = "sqlite"
+    #: `raw_json` 列会把原始帧存下来 → 可以参与"落库后释放 raw"（见 `Sink.persists_raw`）
+    persists_raw = True
 
     def __init__(self, config: Config) -> None:
         super().__init__(config)
@@ -196,7 +263,9 @@ class SqliteSink(Sink):
 
     # ------------------------------------------------------------------ #
     def _row(self, event: Event) -> tuple:
-        keep_raw = self.config.sinks.keep_raw and bool(event.raw)
+        # `Event.raw` 已经是 JSON 文本（见 `models.Event.raw`），直接落列即可，
+        # **不再 `json.dumps` 一次** —— 这条路径每条事件都要走，省一次序列化。
+        keep_raw = self.config.sinks.keep_raw and event.raw is not None
         return (
             # 以 sink 打开时的会话为准：保证每条事件都指向确实存在的 session 行，
             # 不会因为生产者给的 session_id 不一致而产生孤儿数据
@@ -219,7 +288,7 @@ class SqliteSink(Sink):
             event.medal.level if event.medal else None,
             event.field_source,
             event.dedupe_key(),
-            json.dumps(event.raw, ensure_ascii=False) if keep_raw else None,
+            event.raw if keep_raw else None,
             # 只存"有价值的结构化补充"：目前是表情占位符 → 图片元数据。
             # 不依赖 raw（--no-raw 时也要能用），词云与面板都读它。
             json.dumps(event.extra, ensure_ascii=False) if event.extra else None,

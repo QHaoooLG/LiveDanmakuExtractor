@@ -5,6 +5,12 @@
  * 与更早版本的区别：
  *   * 「服务」栏目已删除 —— 版本/落盘格式/脱敏这些是**部署期**信息，
  *     面板开着的时候没人反复看；需要时用 `bili-danmaku web status` / `/api/health` 查；
+ *   * **「速率 / 延迟」整块已删除**（需求 2026-10-09 #1：不再显示到 web 端）——
+ *     连同「条/分钟」「延迟 P50 / P95」「数据源」「订阅者 / 丢弃」一起拿掉。
+ *     这些是**采集器自检**指标（消息条数看的是 hub 内存计数、延迟是接收时刻与
+ *     服务端时间戳之差、订阅者/丢弃是广播背压），不是"这场直播发生了什么"，
+ *     放在信息栏里既占地方又容易和弹幕统计混淆。需要排查时看
+ *     `/api/stats`（字段仍在）或 `bili-danmaku web logs`；
  *   * 「类型分布」是横向彩色柱状图（`TypeBars.vue`）；
  *   * 「发言 TOP」在**累计口径下也显示**（数据来自 SQLite 而不是 hub 内存计数）。
  */
@@ -30,10 +36,13 @@ const topSenders = computed(() => props.stats?.top_senders ?? [])
 /**
  * 发言榜的**范围角标**：两种口径的数据来源不同，必须分开标注，
  * 否则会被误读成同一个统计范围（口径混读是本项目反复强调的坑）。
+ *
+ * 累计口径下后端会回「本次采集以来」—— 曾经这里兜底写的是"该房间全部时间"，
+ * 那正是改口径之前的旧行为（现在榜只算本次采集）。
  */
 const topScope = computed(() => {
   if (!props.stats) return ''
-  if (props.stats.mode === 'cumulative') return props.stats.top_senders_scope ?? '该房间全部时间'
+  if (props.stats.mode === 'cumulative') return props.stats.top_senders_scope ?? '本次采集以来'
   return `最近 ${props.stats.window_s}s`
 })
 
@@ -51,22 +60,10 @@ const topHint = computed(() => topSendersHint(props.stats))
 <template>
   <aside class="side-stats">
     <template v-if="props.stats">
-      <h3>速率 / 延迟<span v-if="modeLabel" class="scope">{{ modeLabel }}</span></h3>
-      <div class="kv"><span>消息条数</span><span>{{ props.stats.msgs_total ?? '-' }}</span></div>
-      <div class="kv"><span>条/分钟</span><span>{{ props.stats.msgs_per_min ?? '-' }}</span></div>
-      <div class="kv">
-        <span>延迟 P50 / P95</span>
-        <span>
-          {{ props.stats.latency_p50_ms ?? '-' }} / {{ props.stats.latency_p95_ms ?? '-' }} ms
-        </span>
-      </div>
-      <div class="kv"><span>数据源</span><span>{{ props.stats.source }}</span></div>
-      <div v-if="props.stats.hub" class="kv">
-        <span>订阅者 / 丢弃</span>
-        <span>{{ props.stats.hub.subscribers }} / {{ props.stats.hub.dropped }}</span>
-      </div>
-
-      <h3>类型分布</h3>
+      <!-- 「速率 / 延迟」整块已删除（需求 2026-10-09 #1）：不再显示到 web 端。
+           这里刻意**不留**只读的"消息条数"之类残迹 —— 需求是"这条栏目不再出现"，
+           留一半会让人以为栏目还在、只是少了几行。需要这些数字时看 `/api/stats`。 -->
+      <h3>类型分布<span v-if="modeLabel" class="scope">{{ modeLabel }}</span></h3>
       <TypeBars
         :by-type="byType"
         :empty-text="modeLabel ? `该范围内无数据（${modeLabel}）` : '该范围内无数据'"

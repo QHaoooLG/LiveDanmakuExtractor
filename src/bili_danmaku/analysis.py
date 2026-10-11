@@ -5,7 +5,7 @@
 * **纯函数 + 有界数据**：输入是"最近 N 条弹幕的快照"，输出是普通 dict。
   没有 IO、没有网络、没有全局状态 —— 因此可以完全离线调用与复算。
 * **不做外发**：本地统计是这个方向能被接受的前提。
-  任何"把弹幕发出去"的能力都属于 §3.2 3B（用户自备 key 的 LLM 插件），
+  任何"把弹幕发出去"的能力都属于可选扩展（用户自备 key 的 LLM 插件），
   **不要**在本模块里加请求。
 * **不放采集热路径**：统计所需的有界聚合由 `server/hub.py` 的 `LiveWindow` 增量维护，
   本模块只在请求时被调用。`hub.publish()` 必须保持 O(1)
@@ -567,17 +567,37 @@ def assess_health(
     | 级别 | 条件 | 提示语 |
     |------|------|--------|
     | `alert` | 有房间 `last_error_kind == "auth"` | 「登录已失效…请重新扫码登录」 |
-    | `warn` | 有房间处于 `PAUSED`（连续认证失败后的暂停） | 「认证反复失败，已暂停…」 |
+    | `warn` | 有房间在 `WAITING_MANUAL`（自动重连已放弃） | 「自动重连已暂停，请手动重连」 |
+    | `warn` | 有房间处于 `PAUSED`（历史状态，已不再产生） | 「认证反复失败，已暂停…」 |
     | `warn` | 单房间重连次数 ≥ `reconnect_alert` | 「连接反复中断」 |
     | `warn` | 有房间 `last_error_kind == "network"` 且重连 ≥ `reconnect_warn` | 「网络不稳定」 |
     | `ok` | 其余 | 无提示 |
 
+    ⚠️ **`auth` 必须排在 `waiting_manual` 之前**：登录失效（`code=-101`）时先要
+    做的是**重新扫码登录**，光点「手动重连」只会再失败一次 —— 那正是
+    "用户被同一个坑反复绊倒"的情形。
+
     ⚠️ **不要**看到一次重连就报警：B 站本身会主动断连，偶发一次是正常的。
     只有"反复"或"原因明确是鉴权"才值得占用用户注意力。
+
+    ## 返回值里为什么有 `code` / `action` / `rooms`
+
+    需求（后一轮）："把凭证失效/重连异常的健康横幅做得**更显眼**"。
+    前端因此要能三件事，缺一件就做不成：
+
+    * `code` —— **稳定的机器标识**（`auth` / `waiting_manual` / `paused` / `flapping`
+      / `unstable`）。文案会改，代码不该跟着改；前端用它决定"要不要显示「去登录」"、
+      "要不要显示「手动重连」"、"要不要算高危"这类判断，而不是去 `title` 里正则匹配
+      （那种写法一改文案就坏）。
+    * `rooms` —— 受影响的房间号，前端标在房间列表上（知道**是哪个房间**出的问题，
+      比读一句"有房间登录失效"有用得多）。
+    * `action` —— 下一步该做什么的一句话（`login` = 去扫码登录，
+      `reconnect` = 点手动重连，`retry` = 重启采集）。
+      放在后端是为了让"判断"和"措辞"都在一处，前端只负责渲染。
     """
     items = [item for item in rooms]
     if not items:
-        return {"level": "ok", "title": "", "detail": "", "rooms": []}
+        return {"level": "ok", "title": "", "detail": "", "rooms": [], "code": "", "action": ""}
 
     def field(room: Any, name: str, default: Any = None) -> Any:
         if isinstance(room, dict):
@@ -594,12 +614,43 @@ def assess_health(
         # 这里不再重复一次，否则会读成"认证失败：认证失败：…"
         return {
             "level": "alert",
+            "code": "auth",
             "title": "采集的登录已失效",
             "detail": (
                 f"房间 {'、'.join(str(room_id(r)) for r in auth_rooms)}："
                 f"{field(first, 'last_error', '')}。请重新扫码登录后重启采集。"
             ),
             "rooms": [room_id(r) for r in auth_rooms],
+            "action": "login",
+        }
+
+    # 手动重连（需求 2026-10-09）：自动重连已放弃，**必须由人推一把**。
+    #
+    # 刻意排在 `PAUSED` 之前、并且给 `action = "reconnect"`：这是唯一一个
+    # "界面要显示一个按钮"的分支，用 `code` 传契约（前端不解析文案）。
+    # 也刻意排在 `auth` 之后：如果是登录失效（-101），先做的是**去登录**，
+    # 光点重连只会再失败一次 —— 那正是"用户被同一个坑反复绊倒"的情形。
+    waiting = [
+        r
+        for r in items
+        if bool(field(r, "manual_reconnect_needed"))
+        or str(field(r, "conn_state", "")).upper() == "WAITING_MANUAL"
+    ]
+    if waiting:
+        first = waiting[0]
+        limit = int(field(first, "manual_reconnect_limit", 0) or 0)
+        tried = f"已自动重连 {limit} 次" if limit else "自动重连已到上限"
+        return {
+            "level": "warn",
+            "code": "waiting_manual",
+            "title": "自动重连已暂停，请手动重连",
+            "detail": (
+                f"房间 {'、'.join(str(room_id(r)) for r in waiting)} {tried}仍未成功，"
+                f"暂时放弃自动重连：{field(first, 'last_error', '')}。"
+                "网络恢复或重新登录之后，点「手动重连」再试一次。"
+            ),
+            "rooms": [room_id(r) for r in waiting],
+            "action": "reconnect",
         }
 
     paused = [r for r in items if str(field(r, "conn_state", "")).upper() == "PAUSED"]
@@ -607,12 +658,14 @@ def assess_health(
         first = paused[0]
         return {
             "level": "warn",
+            "code": "paused",
             "title": "认证反复失败，采集已暂停",
             "detail": (
                 f"房间 {'、'.join(str(room_id(r)) for r in paused)} 连续认证失败后暂停恢复中："
                 f"{field(first, 'last_error', '')}。若持续如此，请检查登录态。"
             ),
             "rooms": [room_id(r) for r in paused],
+            "action": "login",
         }
 
     flapping = [
@@ -621,6 +674,7 @@ def assess_health(
     if flapping:
         return {
             "level": "warn",
+            "code": "flapping",
             "title": "连接反复中断",
             "detail": (
                 f"房间 {'、'.join(str(room_id(r)) for r in flapping)} 已重连 "
@@ -628,6 +682,7 @@ def assess_health(
                 "常见原因是网络不稳定或房间无人开播。"
             ),
             "rooms": [room_id(r) for r in flapping],
+            "action": "retry",
         }
 
     unstable = [
@@ -639,12 +694,14 @@ def assess_health(
     if unstable:
         return {
             "level": "warn",
+            "code": "unstable",
             "title": "网络连接不稳定",
             "detail": f"最近一次失败原因：{field(unstable[0], 'last_error', '')}",
             "rooms": [room_id(r) for r in unstable],
+            "action": "retry",
         }
 
-    return {"level": "ok", "title": "", "detail": "", "rooms": []}
+    return {"level": "ok", "title": "", "detail": "", "rooms": [], "code": "", "action": ""}
 
 
 def bucket_of(recv_ts: float, *, size_s: float) -> float:

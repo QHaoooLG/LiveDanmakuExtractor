@@ -11,8 +11,14 @@
  *     "输入几个字符就过滤建议"的行为，比自绘下拉省事且键盘可达；
  *   * 主播昵称高亮显示（`.anchor`），关掉面板的其它信息也一眼能看到是谁的直播间。
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { formatDuration } from '../format.js'
+import {
+  MAX_SUGGESTIONS,
+  buildSuggestions,
+  filterSuggestions,
+  normalizeRoomEntry,
+} from '../rooms.js'
 
 const props = defineProps({
   /** 当前选中房间号（null = 全部房间） */
@@ -25,9 +31,17 @@ const props = defineProps({
   history: { type: Array, default: () => [] },
   /** 添加请求进行中 */
   busy: { type: Boolean, default: false },
+  /**
+   * `/api/health` 的 `attention`（后端 `assess_health()` 的结果）。
+   *
+   * 需求（"健康横幅更显眼"）：光有一句"有房间登录失效"还不够 ——
+   * 用户得知道**是哪个房间**。这里用它给出问题的房间行标一个醒目的角标，
+   * 与顶栏的常驻角标、上方的横幅形成"三处指向同一件事"。
+   */
+  attention: { type: Object, default: null },
 })
 
-const emit = defineEmits(['add', 'select', 'remove'])
+const emit = defineEmits(['add', 'select', 'remove', 'reconnect'])
 
 const draft = ref('')
 const linkDraft = ref('')
@@ -51,7 +65,25 @@ function focusInput() {
   target.focus()
   // 已有内容时全选：用户想换房间号时直接覆盖，不用先 Ctrl+A
   target.select()
+  // 需求 #8：点「去添加房间」时顺手把下拉列表也展开（候选就在眼前）
+  openList()
 }
+
+/**
+ * 点下拉列表**外面**就收起它。
+ *
+ * 用 `mousedown`（而不是 `click`）并检查 `relatedTarget` 不可靠 —— 直接判断
+ * 点击目标是否落在输入框容器内最稳：`mousedown` 早于 `blur`，
+ * 所以点候选项时不会被提前收起（候选项自己的 `mousedown.prevent` 也保了一手）。
+ */
+function onDocumentMouseDown(event) {
+  if (!open.value) return
+  if (draftBox.value?.contains(event.target)) return
+  closeList()
+}
+
+onMounted(() => document.addEventListener('mousedown', onDocumentMouseDown))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentMouseDown))
 
 defineExpose({ focusInput })
 
@@ -74,13 +106,15 @@ const currentMonitored = computed(() => {
   return (props.rooms ?? []).some((room) => room.room_id === props.current)
 })
 
-/** 建议列表 = 本地记忆 ∪ 已监控房间，去重后按数字倒序（最近的排前面）。 */
-const suggestions = computed(() => {
-  const values = new Set()
-  for (const item of props.history) if (item) values.add(String(item))
-  for (const room of props.rooms) if (room?.room_id) values.add(String(room.room_id))
-  return [...values].sort((a, b) => Number(b) - Number(a) || a.localeCompare(b))
-})
+/**
+ * 下拉列表的候选：本地记忆 ∪ 已监控房间，去重后按房间号倒序。
+ *
+ * 逻辑在 `rooms.js`（纯函数、可离线单测）：昵称优先级、"曾采集 vs 监控中"、
+ * 以及**兼容旧的纯字符串记忆格式**都在那边。
+ */
+const suggestions = computed(() =>
+  buildSuggestions({ history: props.history ?? [], rooms: props.rooms ?? [] }),
+)
 
 /**
  * 从直播间链接里取出房间号（**仅用于即时反馈**）。
@@ -107,6 +141,101 @@ const linkInvalid = computed(
   () => Boolean(linkDraft.value.trim()) && linkRoomId.value == null,
 )
 
+// --------------------------------------------------------------------------- //
+// 房间号下拉列表（需求 #8）
+// --------------------------------------------------------------------------- //
+
+/** 输入框所在的容器：点外面要收起下拉，所以监听它的失焦 */
+const draftBox = ref(null)
+const open = ref(false)
+/** 键盘高亮项（-1 = 没有高亮；回车时若为 -1 就走"直接提交输入框里的值"） */
+const highlight = ref(-1)
+/**
+ * 抑制下一次 `focus` 展开下拉。
+ *
+ * 为什么需要：`choose()` 选中之后要**收起**列表（用户已经选完了），
+ * 但它还会把焦点交回输入框 —— 而输入框的 `@focus` 会立刻把列表又打开。
+ * 结果就是"选了等于没选，列表永远关不掉"（实测踩到）。
+ */
+let suppressOpen = false
+
+/**
+ * 下拉列表内容：**按输入过滤**，空输入时按"最近的排前面"给全部候选。
+ *
+ * 过滤同时匹配房间号与昵称 —— 用户可能只记得"那个叫某某的主播"，
+ * 只按房间号过滤会让他找不到（昵称本来就是这次要加的信息，不用白不用）。
+ * 实现在 `rooms.js` 的 `filterSuggestions()`（纯函数，可离线单测）。
+ */
+const filtered = computed(() =>
+  filterSuggestions(suggestions.value, draft.value, MAX_SUGGESTIONS),
+)
+
+/** 选中候选项：填进输入框（**不直接添加** —— 填错号就添加是很糟的体验）。 */
+function choose(item) {
+  draft.value = String(item.room_id)
+  closeList()
+  // 把焦点交回输入框方便继续输入，但**不要**因此又把列表打开（见 `suppressOpen`）
+  suppressOpen = true
+  draftInput.value?.focus()
+  suppressOpen = false
+}
+
+/**
+ * 候选项的悬停说明。
+ *
+ * 「据库推测」这一档必须**说清楚它不是权威值** —— 需求方实测发现过
+ * "房间号和昵称不匹配"，原因是采集库推导的是"留言最多的人"，
+ * 热门房间里那往往是**观众**（实测 4/4 全错），不能当成主播名。
+ */
+function itemTitle(item) {
+  if (item.monitored) return `正在监控：${item.anchor_name || `房间 ${item.room_id}`}`
+  if (item.name_source === 'guess') {
+    return `房间 ${item.room_id}　曾采集过（这个昵称是"该房间发言最多的人"，可能不是主播）`
+  }
+  if (item.anchor_name) return `房间 ${item.room_id}　曾采集过：${item.anchor_name} 的直播间`
+  return `填入房间号 ${item.room_id}`
+}
+
+function openList() {
+  if (suppressOpen) return
+  open.value = true
+  highlight.value = filtered.value.length ? 0 : -1
+}
+
+function closeList() {
+  open.value = false
+  highlight.value = -1
+}
+
+/** 上下键在候选里移动（到两端就停住，不绕圈 —— 绕圈很容易选错）。 */
+function move(step) {
+  if (!open.value) {
+    openList()
+    return
+  }
+  const total = filtered.value.length
+  if (!total) return
+  const next = highlight.value + step
+  highlight.value = Math.min(Math.max(next, 0), total - 1)
+}
+
+/**
+ * 回车：**有高亮就先填进去，再让用户确认**。
+ *
+ * 为什么不直接提交高亮项：用户可能只是想看看列表里有什么，
+ * 回车直接开始监控一个他没细看的房间号是很重的副作用。
+ * 填进输入框后他再按一次回车就真的添加了（`submit()` 由「添加」按钮和
+ * 输入框的回车共同驱动）—— 也就是说**:第一次回车选中、第二次回车添加**。
+ */
+function onEnter() {
+  const item = filtered.value[highlight.value]
+  if (open.value && item) {
+    choose(item)
+    return
+  }
+  submit()
+}
+
 /** 识别出房间号 → 填进主输入框（用户可见、可改，不直接添加）。 */
 function applyLink() {
   if (linkRoomId.value != null) draft.value = String(linkRoomId.value)
@@ -126,6 +255,7 @@ function submit() {
   if (!value || props.busy) return
   emit('add', value)
   draft.value = ''
+  closeList()
 }
 
 function stateLabel(room) {
@@ -147,7 +277,17 @@ function stateClass(room) {
 
 function roomTitle(room) {
   const name = room.anchor_name ? `${room.anchor_name}的直播间` : `房间 ${room.room_id}`
-  return `只看 ${name}${room.error ? `（${room.error}）` : ''}`
+  const issue = roomIssue(room)
+  return `只看 ${name}${room.error ? `（${room.error}）` : ''}${issue ? `　⚠ ${issue}` : ''}`
+}
+
+/** 该房间是否是健康提示里点名的房间之一（需求：知道**是哪个**房间出了问题）。 */
+function roomIssue(room) {
+  const payload = props.attention
+  if (!payload || payload.level === 'ok') return ''
+  const flagged = (payload.rooms ?? []).map(String)
+  if (!flagged.includes(String(room?.room_id))) return ''
+  return payload.title || '需要处理'
 }
 </script>
 
@@ -209,18 +349,55 @@ function roomTitle(room) {
       </div>
     </div>
 
-    <!-- 房间号输入 + 添加（需求点 2）：datalist 给出本地记忆过的房间号 -->
+    <!-- 房间号输入 + 添加（需求点 2 / 需求 #8）：
+         输入框自带**下拉列表**，每个房间号旁边显示主播昵称（曾采集过的也能显示）。 -->
     <div class="add-row">
-      <input
-        ref="draftInput"
-        v-model="draft"
-        list="room-history"
-        type="text"
-        inputmode="numeric"
-        placeholder="输入房间号，如 804456"
-        :disabled="busy"
-        @keyup.enter="submit"
-      />
+      <div ref="draftBox" class="combo">
+        <input
+          ref="draftInput"
+          v-model="draft"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder="输入房间号，如 804456"
+          :disabled="busy"
+          role="combobox"
+          aria-autocomplete="list"
+          :aria-expanded="open"
+          aria-controls="room-suggest"
+          @focus="openList"
+          @input="openList"
+          @keydown.down.prevent="move(1)"
+          @keydown.up.prevent="move(-1)"
+          @keydown.esc="closeList"
+          @keyup.enter="onEnter"
+        />
+        <!-- 下拉列表（需求 #8）。刻意**不用**原生 `<datalist>`：
+             它只能显示 `value`，没法在房间号旁边带主播昵称；而且各家浏览器
+             对它的样式与键盘行为都不一致。 -->
+        <div v-if="open && filtered.length" id="room-suggest" class="combo-list" role="listbox">
+          <button
+            v-for="(item, index) in filtered"
+            :key="item.room_id"
+            type="button"
+            role="option"
+            :aria-selected="index === highlight"
+            class="combo-item"
+            :class="{ active: index === highlight, current: Number(item.room_id) === current }"
+            :title="itemTitle(item)"
+            @mouseenter="highlight = index"
+            @mousedown.prevent="choose(item)"
+          >
+            <span class="cid">{{ item.room_id }}</span>
+            <span v-if="item.anchor_name" class="cname" :class="{ guess: item.name_source === 'guess' }">
+              {{ item.anchor_name }}
+            </span>
+            <span v-if="item.monitored" class="cbadge">监控中</span>
+            <span v-else-if="item.name_source === 'guess'" class="cbadge muted">据库推测</span>
+            <span v-else-if="item.anchor_name" class="cbadge muted">曾采集</span>
+          </button>
+        </div>
+      </div>
       <button
         :disabled="!draft.trim() || busy || (Number(draft.trim()) === current && currentMonitored)"
         :title="Number(draft.trim()) === current && currentMonitored ? '该房间已在监控中' : '开始监控这个房间'"
@@ -228,23 +405,11 @@ function roomTitle(room) {
       >
         {{ busy ? '添加中…' : '添加' }}
       </button>
-      <datalist id="room-history">
-        <option v-for="value in suggestions" :key="value" :value="value"></option>
-      </datalist>
     </div>
-    <div v-if="suggestions.length" class="history">
-      <span class="hint">记忆：</span>
-      <button
-        v-for="value in suggestions.slice(0, 6)"
-        :key="value"
-        class="chip"
-        :class="{ active: Number(value) === current }"
-        :title="`填入 ${value}`"
-        @click="draft = value"
-      >
-        {{ value }}
-      </button>
-    </div>
+    <!-- 这里原来还有一排「记忆：804456 · 某某」的胶囊。
+         需求方要求**去掉**：房间号输入框已经有下拉列表（同样的信息、且能搜昵称），
+         两处并列反而让人不知道该点哪个。同理删掉了原来的 `<datalist>`。
+         下拉列表是唯一的记忆入口，`history` / `rooms` 两个来源在那里合并。 -->
 
     <h3>
       监控中
@@ -264,6 +429,21 @@ function roomTitle(room) {
         <span v-else class="rname muted">房间 {{ room.room_id }}</span>
         <span class="rsub">{{ room.room_id }} · {{ stateLabel(room) }} · {{ room.stored }} 条</span>
       </span>
+      <!-- 健康提示点名的房间：加一个常驻角标（需求：一眼看出是哪个房间） -->
+      <span v-if="roomIssue(room)" class="issue" :class="attention?.level" :title="roomIssue(room)">
+        ⚠
+      </span>
+      <!-- 新增：这个房间停在了"等手动重连"，就地给按钮 ——
+           用户看到的是"某个房间出问题了"，让他还要去上面横幅里找对应操作
+           是多余的一步（横幅是汇总视角，房间行是"就是它"的视角）。 -->
+      <button
+        v-if="room.manual_reconnect_needed"
+        class="reconnect"
+        :title="`自动重连已尝试 ${room.manual_reconnect_limit ?? 5} 次仍未成功；点这里让它立刻再连一次`"
+        @click.stop="emit('reconnect', room.room_id)"
+      >
+        重连
+      </button>
       <button style="padding:1px 7px;font-size:12px" title="停止监控该房间" @click.stop="emit('remove', room.room_id)">
         ×
       </button>
@@ -302,24 +482,59 @@ function roomTitle(room) {
 .tag.living { color: #fca5a5; border-color: #7f1d1d; }
 .tag.warn { color: #fcd34d; border-color: #78550f; }
 
-.add-row { display: flex; gap: 6px; }
+.add-row { display: flex; gap: 6px; align-items: flex-start; }
 .add-row input { flex: 1; min-width: 0; }
-.history { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
-.hint { color: var(--muted); font-size: 11px; }
-.chip {
-  padding: 1px 8px; font-size: 12px; border-radius: 999px;
-  color: var(--muted); background: var(--panel-2);
-  font-variant-numeric: tabular-nums;
+
+/* 房间号下拉列表（需求 #8）：容器要 `position: relative`，列表绝对定位浮在上层 */
+.combo { position: relative; flex: 1; min-width: 0; }
+.combo input { width: 100%; }
+.combo-list {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 2px);
+  max-height: 220px; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 3px;
 }
-.chip.active { color: var(--accent); border-color: #1e4d63; }
+.combo-item {
+  display: flex; align-items: baseline; gap: 6px; width: 100%;
+  padding: 3px 7px; border: none; border-radius: 4px;
+  background: none; color: var(--text); text-align: left; cursor: pointer;
+  font-size: 12px;
+}
+.combo-item.active { background: #1d2b36; }
+.combo-item.current .cid { color: var(--accent); }
+.combo-item .cid { font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.combo-item .cname {
+  flex: 1; min-width: 0; color: #9ecbf5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 「据库推测」的名字用灰斜体：它不是权威主播名，不能看起来像 */
+.combo-item .cname.guess { color: var(--muted); font-style: italic; }
+.combo-item .cbadge {
+  flex-shrink: 0; font-size: 10px; color: var(--accent);
+  border: 1px solid #1e4d63; border-radius: 999px; padding: 0 6px;
+}
+.combo-item .cbadge.muted { color: var(--muted); border-color: var(--border); }
+
+/* 原来「记忆」胶囊的 .history/.hint/.chip 样式已随那排胶囊一起删掉：
+   需求方要求把记忆房间号只留在下拉列表里（两处并列会让人不知道该点哪个）。 */
 
 h3 .scope {
   margin-left: 6px; font-size: 11px; font-weight: 400;
   color: #8b93a1; border: 1px solid #2c313a; border-radius: 999px; padding: 1px 7px;
 }
 .room-item { align-items: flex-start; }
+/* 「重连」按钮：与「×」并排，但用强调色区分（一个是修复动作，一个是危险动作） */
+.room-item .reconnect {
+  padding: 1px 7px; font-size: 12px;
+  color: var(--accent); border-color: #1e4d63;
+}
 .room-item .rid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .room-item .rname { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-item .rname.muted { color: var(--muted); }
 .room-item .rsub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 出问题的房间：常驻 ⚠ 角标（红=需要处理，黄=注意） */
+.issue { flex-shrink: 0; font-size: 13px; line-height: 1; cursor: help; }
+.issue.warn { color: #e3b341; }
+.issue.alert { color: #f85149; }
 </style>

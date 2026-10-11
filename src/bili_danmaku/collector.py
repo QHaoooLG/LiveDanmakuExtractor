@@ -5,14 +5,18 @@
     IDLE → CONNECTING → AUTH_SENDING → AUTHED → STREAMING
                                        ↓
                                   RECONNECTING ──(退避)──→ CONNECTING
-                                       ↓ 连续认证失败
-                                    PAUSED ──(300s)──→ CONNECTING
+                                       ↓ 连续失败达上限
+                              WAITING_MANUAL ──(用户点「手动重连」)──→ CONNECTING
 
 设计要点：
     * 每次重连都**重新获取 token**（token 会过期，实测必须如此）；
     * 心跳由独立任务发送，读循环超时是常态（低热度房间消息稀疏），
       因此用「多久没收到心跳回应」判假死，而不是「多久没收到消息」；
-    * 读循环只做「解析 → 去重 → 投递」，投递是非阻塞的，绝不因落盘慢而卡住心跳。
+    * 读循环只做「解析 → 去重 → 投递」，投递是非阻塞的，绝不因落盘慢而卡住心跳；
+    * **自动重连有次数上限**（需求 2026-10-09）：连续失败到
+      `MAX_RECONNECT_ATTEMPTS` 之后不再自己重试，进入 `WAITING_MANUAL`
+      等用户手动点一下 —— 无限重连会对已经出问题的服务端/凭据一直打请求，
+      而用户只看到一个永远转不完的"重连中"。
 """
 
 from __future__ import annotations
@@ -30,17 +34,20 @@ from .credentials import Credentials
 from .dedupe import DedupeCache
 from .filters import FilterSpec
 from .models import ConnState, Event, EventType, Medal, RoomInfo, SessionMeta
-from .parser import parse_message
+from .parser import parse_message, serialize_raw
 from .sinks import Bus
 from .utils import anonymize_uid, anonymize_uname, backoff_delay, now
 
 log = logging.getLogger("bili_danmaku.collector")
 
-#: 连续认证失败多少次后暂停该房间
-MAX_CONSECUTIVE_AUTH_FAILURES = 5
-#: 暂停时长（秒）
-PAUSE_SECONDS = 300.0
-#: 连接存活多久才算「稳定成功」。低于该值时**不重置退避**，
+#: **自动重连尝试上限**（需求 2026-10-09："自动重连尝试 5 次后暂时放弃自动重连，
+#: 改为等待用户使用手动重连功能"）。
+#:
+#: 计数口径是"**连续失败**"：拿到一次稳定连接（`MIN_STABLE_SECONDS` 以上）就清零。
+#: 否则一个跑了一整晚、中间偶发断过 5 次的房间会被判成"反复失败"而停下来 ——
+#: 那不是用户要的（B 站自己会主动断连，偶发重连是正常的）。
+MAX_RECONNECT_ATTEMPTS = 5
+#: 连接存活多久才算「稳定成功」。低于该值时**不重置退避与重连计数**，
 #: 避免服务端「接受后立刻断开」时退避被反复清零而形成重连风暴。
 MIN_STABLE_SECONDS = 5.0
 #: 去重缓存 TTL（秒）—— 需覆盖历史补种与实时流的重叠窗口
@@ -77,6 +84,9 @@ class CollectorStats:
     #: 上次失败的归类：`auth` / `network` / `protocol` / `unknown`（空 = 还没失败过）。
     #: 面板据此决定是"请重新登录"还是"网络问题，请稍候"。
     last_error_kind: str = ""
+    #: 用户点过几次「手动重连」（需求 2026-10-09）。给人看的：面板可以显示
+    #: "已手动重连 N 次"，用户据此判断"点了到底有没有用"。
+    manual_reconnects: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         data = {
@@ -99,6 +109,7 @@ class CollectorStats:
             "ended_at": self.ended_at,
             "last_error": self.last_error,
             "last_error_kind": self.last_error_kind,
+            "manual_reconnects": self.manual_reconnects,
         }
         if self.started_at and self.ended_at:
             data["duration_s"] = round(self.ended_at - self.started_at, 1)
@@ -131,6 +142,7 @@ class RoomCollector:
         seed_history: bool = False,
         anonymize: bool = False,
         dedupe_maxsize: int = 100_000,
+        max_reconnect_attempts: int = MAX_RECONNECT_ATTEMPTS,
     ) -> None:
         self.room_input = room_input
         self.config = config
@@ -142,6 +154,10 @@ class RoomCollector:
         self.filters = filters if filters is not None else FilterSpec(content_only=True)
         self.seed_history = seed_history
         self.anonymize = anonymize
+        #: 自动重连尝试上限（连续失败口径）。默认就是模块常量；
+        #: 允许注入是为了让用例能用一个小值快速走到"放弃自动重连"那条分支
+        #: （否则每个用例都要等 5 轮退避）。
+        self.max_reconnect_attempts = max(int(max_reconnect_attempts), 1)
 
         self.room: RoomInfo | None = None
         self.state = ConnState.IDLE
@@ -150,6 +166,8 @@ class RoomCollector:
 
         self._dedupe = DedupeCache(maxsize=dedupe_maxsize, ttl=DEDUPE_TTL)
         self._stop = asyncio.Event()
+        #: 用户请求手动重连（`request_reconnect()` 置位，`_wait_manual()` 消费）
+        self._reconnect_requested = asyncio.Event()
         self._deadline: float | None = None
         self._seq = 0
         self._consecutive_auth_failures = 0
@@ -208,6 +226,68 @@ class RoomCollector:
     def request_stop(self) -> None:
         self._stop.set()
 
+    @property
+    def manual_reconnect_needed(self) -> bool:
+        """是否**正在等用户手动重连**（面板据此显示那个按钮）。
+
+        刻意做成**从状态推导**而不是另存一个布尔：两个真相源一定会有一天不同步
+        （本项目已经吃过几次这个亏），而这里"等人工"与"状态是 WAITING_MANUAL"
+        本来就是同一件事。
+        """
+        return self.state == ConnState.WAITING_MANUAL
+
+    def request_reconnect(self) -> bool:
+        """**手动重连**：让已放弃自动重连的房间再试一次（需求 2026-10-09）。
+
+        返回 `False` 表示"这一下不需要"——只有停在 `WAITING_MANUAL` 时才受理。
+        为什么不在别的状态也受理：`STREAMING` 时点一下就把好连接掐掉重建，
+        是纯粹的倒退；`RECONNECTING` 时它本来就在试，再置一次位只会白跑一轮。
+        面板据此给出准确反馈（"已请求重连" / "当前不需要重连"）。
+
+        置位是**事件**而不是标志位：等待方消费掉就自动清空，于是不存在
+        "两次点击合并成一次"或"清了之后还残留"的问题。
+        """
+        if self.state != ConnState.WAITING_MANUAL:
+            return False
+        self.stats.manual_reconnects += 1
+        self._reconnect_requested.set()
+        log.info("收到手动重连请求（第 %d 次）", self.stats.manual_reconnects)
+        return True
+
+    async def _wait_manual(self, reason: str) -> None:
+        """进入 `WAITING_MANUAL` 并等待用户手动重连（**不会自己恢复**）。
+
+        等待期间仍然响应"停止面板"（`request_stop`）与截止时间，否则一个已放弃
+        重连的房间会把整个采集任务挂在退出路径上。
+        """
+        self._set_state(ConnState.WAITING_MANUAL)
+        # 置位期间的重连请求要认：用户可能比这条日志更早点了按钮
+        log.error(
+            "%s；自动重连已尝试 %d 次，暂时放弃 —— 等待手动重连"
+            "（面板上点「手动重连」，或 POST /api/rooms/%s/reconnect）",
+            reason, self.max_reconnect_attempts, getattr(self.room, "room_id", self.room_input),
+        )
+        stop_task = asyncio.ensure_future(self._stop.wait())
+        reconnect_task = asyncio.ensure_future(self._reconnect_requested.wait())
+        try:
+            # 谁先到就听谁的；另一个在 finally 里取消
+            await asyncio.wait(
+                {stop_task, reconnect_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if reconnect_task.done() and not stop_task.done():
+                self._reconnect_requested.clear()
+                self._set_state(ConnState.RECONNECTING)
+                log.info("手动重连：立即重试")
+        finally:
+            for task in (stop_task, reconnect_task):
+                task.cancel()
+            await asyncio.gather(stop_task, reconnect_task, return_exceptions=True)
+
+    @staticmethod
+    def _limit_reached(streak: int, limit: int = MAX_RECONNECT_ATTEMPTS) -> bool:
+        """连续失败是否已达上限。抽出来是为了让"上限口径"只有一处定义。"""
+        return streak >= max(int(limit), 1)
+
     async def _sleep_async(self, seconds: float) -> None:
         """可被 request_stop 提前打断的等待。"""
         if seconds <= 0:
@@ -235,7 +315,15 @@ class RoomCollector:
     # ------------------------------------------------------------------ #
 
     async def _connection_loop(self) -> None:
+        """连接 → 采集 → 失败 → 退避重连；连续失败到上限就停下等人。
+
+        计数分两个（`attempt` / `reconnect_streak`）：前者只喂退避算法（成功后清零，
+        所以每次断线都从短延迟开始），后者是"连续失败了多少次"（只有**稳定连接过**
+        才清零），用来判断"该不该放弃自动重连"。
+        """
         attempt = 0
+        #: 连续失败次数（没有一次稳定连接就不清零）—— 达上限即转人工
+        reconnect_streak = 0
         while not self._stop.is_set() and not self._deadline_reached():
             connection: DanmakuConnection | None = None
             try:
@@ -272,9 +360,12 @@ class RoomCollector:
 
                 await self._pump(connection)
 
-                # 只有稳定存活过才算真正成功，否则保留退避进度
+                # 只有稳定存活过才算真正成功：**两个计数一起清**。
+                # 不稳定就保留进度，否则服务端"接受后立刻断开"会形成重连风暴，
+                # 而且"连续失败"永远到不了上限（等于没有上限）。
                 if asyncio.get_running_loop().time() - connected_at >= MIN_STABLE_SECONDS:
                     attempt = 0
+                    reconnect_streak = 0
 
             except asyncio.CancelledError:
                 raise
@@ -286,15 +377,9 @@ class RoomCollector:
                 log.error(
                     "认证失败(%d/%d): %s",
                     self._consecutive_auth_failures,
-                    MAX_CONSECUTIVE_AUTH_FAILURES,
+                    MAX_RECONNECT_ATTEMPTS,
                     self.stats.last_error,
                 )
-                if self._consecutive_auth_failures >= MAX_CONSECUTIVE_AUTH_FAILURES:
-                    self._set_state(ConnState.PAUSED)
-                    log.error("连续认证失败，暂停该房间 %.0f 秒", PAUSE_SECONDS)
-                    await self._sleep_async(PAUSE_SECONDS)
-                    self._consecutive_auth_failures = 0
-                    continue
             except (BiliApiError, OSError, asyncio.TimeoutError) as exc:
                 self._remember_error("network", exc, fallback="连接失败")
                 log.warning("连接失败: %s，准备重连", self.stats.last_error)
@@ -309,11 +394,29 @@ class RoomCollector:
             if self._stop.is_set() or self._deadline_reached():
                 break
 
+            reconnect_streak += 1
+            self.stats.reconnects += 1
+
+            # 连续失败到上限 ⇒ **暂时放弃自动重连**，等用户手动点（需求 2026-10-09）。
+            # 放在退避之前：已经决定不自动重连了，就不该再多睡一次退避。
+            if self._limit_reached(reconnect_streak, self.max_reconnect_attempts):
+                self._set_state(ConnState.WAITING_MANUAL)
+                await self._wait_manual(f"连续 {reconnect_streak} 次连接失败")
+                if self._stop.is_set() or self._deadline_reached():
+                    break
+                # 人工介入过 ⇒ 计数清零，重新给满 5 次自动重连的机会；
+                # 退避也归零（否则手动重连还要等 60 秒，用户会以为按钮没反应）。
+                reconnect_streak = 0
+                attempt = 0
+                continue
+
             delay = backoff_delay(attempt, cap=self.config.client.reconnect_max_delay)
             attempt += 1
-            self.stats.reconnects += 1
             self._set_state(ConnState.RECONNECTING)
-            log.info("%.1f 秒后重连（第 %d 次）", delay, attempt)
+            log.info(
+                "%.1f 秒后重连（连续第 %d/%d 次）",
+                delay, reconnect_streak, self.max_reconnect_attempts,
+            )
             await self._sleep_async(delay)
 
     def _remember_error(self, kind: str, exc: BaseException, *, fallback: str) -> None:
@@ -521,7 +624,7 @@ class RoomCollector:
             is_admin=bool(record.get("isadmin")),
             field_source="history_api",
             extra={"history": True},
-            raw=record if self.config.sinks.keep_raw else None,
+            raw=serialize_raw(record) if self.config.sinks.keep_raw else None,
         )
 
     @staticmethod

@@ -43,7 +43,13 @@ keep_raw = true
 rotate_hours = 1
 batch_size = 200
 flush_interval = 1.0
-queue_size = 20000
+# 每个 sink 队列的槽位数。它**不是吞吐参数**：读循环绝不阻塞，队列只在
+# "生产快过消费"时起作用（满载丢最旧并计数）。所以它决定的是
+# 「能容忍 sink 卡顿多久 = queue_size / 生产速率」。
+# 实测真机（jsonl+csv+sqlite，灌到 1000 条/秒）队列峰值只有 21 条 ——
+# 队列是纯余量。5000 在 3 房间下约 57 MB 内存，仍可容忍约 25 秒磁盘卡顿
+# （按高热度房间 200 条/秒估算）；调到 20000 会涨到约 229 MB。
+queue_size = 5000
 # SQLite 采集库路径；留空 = {out_dir}/danmaku.db
 sqlite_path = ""
 # 标注库（面板的标记/备注）路径；留空 = {out_dir}/annotations.db

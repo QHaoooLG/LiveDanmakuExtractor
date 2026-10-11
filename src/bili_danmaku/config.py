@@ -40,6 +40,14 @@ class ApiConfig(BaseModel):
     cookie: str = ""
     cookie_file: str = ".secrets/cookies.json"
     request_timeout: float = 10.0
+    #: 「房间号 → 房间信息（含主播昵称）」这条链路的**整体兜底超时**（秒）。
+    #:
+    #: 为什么不能只靠 `request_timeout`：解析一个房间要走 `room_init` +
+    #: `anchor_info`（后者 `retry=1`），实际可能叠加成 3 次请求 × 10 s。
+    #: 系统代理不通时（实测黑洞代理）单次 `/api/room-info` 达到 **30.1 s**，
+    #: 前端 `RoomPanel` 的输入框/按钮会被 `busy` 一直禁着 —— 用户视角就是"面板卡死"。
+    #: 这里给整条链路一个截止时间，超时直接报错让用户重试（见 `PanelService._resolve_room`）。
+    resolve_timeout: float = 12.0
     min_request_interval: float = 1.0
     prefer_getdanmuinfo: bool = True
     retry_max: int = 3
@@ -60,7 +68,29 @@ class SinksConfig(BaseModel):
     rotate_hours: float = 1.0
     batch_size: int = 200
     flush_interval: float = 1.0
-    queue_size: int = 20000
+    #: 每个 sink 队列的**槽位数**（内存上限）。
+    #:
+    #: 它**不是**吞吐参数 —— 读循环绝不阻塞，队列只在"生产快过消费"时起作用：
+    #: 满载时丢最旧并计数，所以它决定的是
+    #: **能容忍 sink 卡顿多久 = queue_size / 生产速率**。
+    #: （⚠️ 不要用 queue_size / 消费速率 去算：实测各 sink 消费 2.5~8.6 万条/秒，
+    #: 那个口径会得出"只有 0.1 秒"的错误结论。真正的风险是 sink **卡住**时
+    #: 消费速率为 0。）
+    #:
+    #: 取值依据（2026-10-10 实测，含 raw 时单条约 4.0 KB）：
+    #:
+    #: | queue_size | 3 房间内存 | 容忍卡顿 @200/s | @1000/s |
+    #: |---:|---:|---:|---:|
+    #: | 2,000 | 23 MB | 10 s | 2 s |
+    #: | **5,000** | **57 MB** | **25 s** | **5 s** |
+    #: | 20,000（旧默认） | 229 MB | 100 s | 20 s |
+    #:
+    #: 实测（真 Bus + jsonl/csv/sqlite，灌到 1000 条/秒）
+    #: 队列峰值只有 **21 条** —— 队列是纯余量，不是瓶颈。旧默认 20000 带来 229 MB
+    #: 常驻内存，换来的只是"磁盘卡满 100 秒也不丢"这种几乎用不到的能力。
+    #: 5000 把内存压到 57 MB（−75%），同时仍留 25 秒余量（约等于一次典型磁盘抖动的
+    #: 几十倍）。要更保守就直接调大这个值，代价是线性增长的内存。
+    queue_size: int = 5000
     #: SQLite 文件路径；留空则使用 `{out_dir}/danmaku.db`
     sqlite_path: str = ""
     #: 标注库（标记/笔记）路径；留空则使用 `{out_dir}/annotations.db`。

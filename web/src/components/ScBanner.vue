@@ -1,19 +1,22 @@
 <script setup>
 /**
- * 高额 SC 横幅（V2-b 的"告警"在面板侧的落地）。
+ * SC 横幅（V2-b 的"告警"在面板侧的落地）。
  *
  * 为什么做成横幅而不是弹窗/声音：面板是**旁挂**的观察工具，
  * 弹窗会打断操作、声音在办公室里很尴尬；横幅足够醒目又能自动消失。
  *
- * 只显示达到阈值的 SC，多个同时到达时排队 —— 队列上限 3 条，
- * 超了丢最旧的（和 hub 的慢消费者策略一致：宁可少显示，不反向拖累采集）。
+ * > **金额门槛已移除**（需求 2026-10-07 #3/#4）：以前只有 `price >= threshold`
+ * > 的 SC 才弹，阈值还能在顶栏改。现在**收到 SC 就提示** —— 金额由后端
+ * > `filters.min_price` 与 CLI `--min-price` 一起删除，全项目不再有
+ * > "按金额筛事件"这个概念（`--price-unit` 逃生舱随之作废）。
+ *
+ * 多个同时到达时排队 —— 队列上限 3 条，超了丢最旧的
+ * （和 hub 的慢消费者策略一致：宁可少显示，不反向拖累采集）。
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   events: { type: Array, required: true },
-  /** 金额门槛（元）；SC 的 price 本身就是元 */
-  threshold: { type: Number, default: 30 },
   /** 每条展示时长（毫秒） */
   duration: { type: Number, default: 6000 },
 })
@@ -48,8 +51,10 @@ function dismiss() {
 }
 
 /**
- * 用 `session_id-seq` 做去重键：WS 重连会回填最近事件，
+ * 用 `session_id-seq` 去重键：WS 重连会回填最近事件，
  * 不去重的话同一条 SC 会重复弹。
+ *
+ * **不按金额筛**：所有 SC 都提示（金额门槛已随需求 #3/#4 删除）。
  */
 watch(
   () => props.events,
@@ -57,7 +62,6 @@ watch(
     if (!list?.length) return
     for (const event of list) {
       if (event.type !== 'super_chat') continue
-      if ((event.price ?? 0) < props.threshold) continue
       const key = `${event.session_id ?? ''}-${event.seq ?? ''}-${event.msg_id ?? ''}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -66,14 +70,6 @@ watch(
     if (seen.size > 500) seen.clear()
   },
   { deep: false },
-)
-
-watch(
-  () => props.threshold,
-  () => {
-    // 换阈值后重新开始判定，避免旧 key 挡住新命中
-    seen.clear()
-  },
 )
 
 onUnmounted(() => clearTimeout(timer))

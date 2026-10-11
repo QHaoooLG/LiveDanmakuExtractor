@@ -125,7 +125,28 @@ class DanmakuStore:
         except sqlite3.Error as exc:
             raise StoreError(f"无法打开数据库 {self.path}: {exc}") from exc
         self._conn.row_factory = sqlite3.Row
+        # **夹住这条连接的页缓存**。
+        #
+        # 面板是"每请求开一条只读连接"（`_run_with_store`），而
+        # `anyio.to_thread` 默认 40 个工作线程 ⇒ 最多 40 条连接同时在。
+        # SQLite 默认 `cache_size = -2000`（约 2 MB）⇒ **约 80 MB 重复页缓存**，
+        # 而且它们缓存的是同一个只读文件、内容完全一样。
+        #
+        # 512 KB/连接对我们这种"每次只扫一个时间窗口"的查询足够，
+        # 40 条并发也只有约 20 MB。真正的大查询（导出、密度聚合）是流式的，
+        # 不吃页缓存。
+        self._conn.execute("PRAGMA cache_size = -512")
         self._columns = {row[1] for row in self._conn.execute("PRAGMA table_info(event)")}
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """底层的**只读**连接（供调用方执行自己的 PRAGMA / 轻量查询）。
+
+        暴露它而不是让调用方去摸 `_conn`：这是只读查询层，
+        给一个明确的公开入口比"大家都知道那个私有字段"更诚实。
+        写入请走 `SqliteSink`。
+        """
+        return self._conn
 
     def has_column(self, name: str) -> bool:
         """表里有没有这一列。
@@ -243,6 +264,58 @@ class DanmakuStore:
         ).fetchall()
         return {int(row["room_id"]): int(row["n"]) for row in rows}
 
+    def room_anchor_names(
+        self, room_ids: Iterable[int], *, limit: int = 500
+    ) -> dict[int, str]:
+        """按房间取**留言最多的那个昵称**，当"主播昵称"用（`{room_id: uname}`）。
+
+        用途（需求 #8）：房间号下拉列表里，对"曾采集过的房间"顺带显示主播昵称。
+
+        ## 为什么是"留言最多的昵称"而不是真的主播名
+
+        **数据库里没有主播名**。采集库里只有弹幕发送者（`uname`），主播昵称要么
+        来自正在监控的房间运行时缓存，要么得去调 B 站接口（`get_anchor_in_room`）。
+        为了一个下拉列表去调网络接口是不划算的（还会给风控多送请求）。
+
+        而"留言最多的昵称"在直播间里**几乎总是主播自己** —— 主播发弹幕比谁都勤，
+        这是直播间弹幕数据的常识性特征。所以这里当成**启发式**用它，并在界面上
+        明确标注"曾采集"（不是"正在监控"），避免让用户以为这是权威信息。
+
+        `limit` 是房间数上限：调用方只传下拉列表里那几个房间号，不会失控。
+
+        ## 为什么用 `fetchmany` 而不是 `fetchall`
+
+        `limit` 只夹住**房间数**，夹不住**返回的行数** —— 分组键是
+        `(room_id, uname)`，一个热门房间有 10 万个不同昵称就有 10 万行。
+        `fetchall()` 会把它们全部物化成 `sqlite3.Row` 对象，
+        而这里其实**每个房间只留第一行**。流式读取时一旦凑齐 `len(wanted)` 个
+        房间就可以提前收手，大房间里通常几百行就够。
+        """
+        wanted = [int(item) for item in room_ids if item is not None][: max(int(limit), 1)]
+        if not wanted:
+            return {}
+        placeholders = ",".join("?" * len(wanted))
+        # 每个房间取 `count` 最大的 uname；并列时用 uname 兜底排序，保证结果稳定
+        cursor = self._conn.execute(
+            "SELECT room_id, uname, COUNT(*) AS n FROM event "
+            f"WHERE room_id IN ({placeholders}) AND uname IS NOT NULL AND uname != '' "
+            "GROUP BY room_id, uname ORDER BY n DESC, uname ASC",
+            wanted,
+        )
+        names: dict[int, str] = {}
+        while len(names) < len(wanted):
+            rows = cursor.fetchmany(200)
+            if not rows:
+                break
+            for row in rows:
+                room = int(row["room_id"])
+                if room in names:
+                    continue  # 已取过该房间的第一名（结果按 n 降序）
+                names[room] = str(row["uname"])
+            if len(names) >= len(wanted):
+                break
+        return names
+
     def time_range(self, **filters: Any) -> tuple[float | None, float | None]:
         where, params = self._build_where(**filters)
         row = self._conn.execute(
@@ -291,6 +364,25 @@ class DanmakuStore:
         ).fetchall()
         return [{"uid": row["uid"], "uname": row["uname"], "count": int(row["n"])} for row in rows]
 
+    def room_ids(self) -> list[int]:
+        """库里出现过事件的房间号（升序）。
+
+        用途：`/api/stats` 的"全部房间"发言榜要**按房间分别查再合并**
+        （见 `app._window_top_senders`）—— 那条路走 `idx_event_room_ts_type`，
+        比"全库 `GROUP BY uid`"快好几个数量级。
+
+        **实测**（`dist/exe/data/danmaku.db`，1 GB / 244,036 行、9 个房间）：
+        `SELECT DISTINCT room_id FROM event` = **16 ms**，计划是
+        `SCAN event USING COVERING INDEX idx_event_room_ts`（纯索引扫描、不回表）。
+
+        ⚠️ 不要改用 `count_by_room()` 来取房间号：它带 `recv_ts` 过滤时会退化成
+        整索引扫描（实测 17~227 ms），而我们只要房间号。
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT room_id FROM event ORDER BY room_id"
+        ).fetchall()
+        return [int(row["room_id"]) for row in rows]
+
     def top_gifts(self, *, limit: int = 10, **filters: Any) -> list[dict[str, Any]]:
         where, params = self._build_where(**filters)
         clause = (
@@ -321,15 +413,46 @@ class DanmakuStore:
         self,
         *,
         limit: int | None = None,
+        offset: int = 0,
         batch_size: int = 1000,
+        slim: bool = False,
         **filters: Any,
-    ) -> Iterator[Event]:
-        """流式产出事件，避免一次性载入内存（导出大结果集时用）。"""
+    ) -> Iterator[Any]:
+        """流式产出事件，避免一次性载入内存（导出大结果集时用）。
+
+        `slim=True` 走**瘦投影**：
+        不构造 pydantic `Event`、不带原始帧，直接由行拼 dict。
+
+        为什么这是导出的大头：`_to_event()` 每条都要构造一个 pydantic `Event`
+        再 `model_dump()` 序列化，实测 5 万条要 14~16 秒；而"原始帧"在导出里
+        只是一列转义 JSON（表格化之后既看不了也搜不动）。默认导出因此走瘦投影，
+        需要取证时显式要 `raw=1`。
+
+        ⚠️ 之后 `raw` 走的是 **JSON 文本**、**不再有 `json.loads` 往返**
+        （见 `models.Event.raw`），所以这条路径剩下的唯一大头就是 pydantic 的构造与序列化。
+
+        ## `offset`：分页必须**下推到 SQL**（P0-1，2026-10-10）
+
+        本方法按 `id` 升序流式产出，天然支持 `LIMIT ? OFFSET ?`。
+        调用方**不要**自己去 `list(...)` 再切片：那会把前 `offset` 行也整行取出、
+        逐行 `_to_event()`（构造 pydantic + 携带原始帧），**内存随 offset 线性增长**。
+        `/api/events` 之前就是这么写的（`limit=limit + offset` 再切片），
+        而 `offset` 没有上限 ⇒ `offset=200000` 时会一次物化 20 万个 Event，
+        是实打实的 OOM 口子。下推到 SQL 之后，只有 `limit` 行会被构造。
+        """
         where, params = self._build_where(**filters)
         sql = f"SELECT {self._event_columns_sql} FROM event{where} ORDER BY id"
         if limit is not None:
             sql += " LIMIT ?"
-            params = [*params, limit]
+            params = [*params, max(int(limit), 0)]
+            skip = max(int(offset), 0)
+            if skip:
+                sql += " OFFSET ?"
+                params = [*params, skip]
+        elif offset:
+            # 只给 offset 不给 limit 的语义太容易误用（等于"跳过 N 条然后全取"），
+            # 直接拒绝而不是静默忽略。
+            raise ValueError("iter_events(offset=...) 必须同时给出 limit")
 
         cursor = self._conn.execute(sql, params)
         while True:
@@ -337,7 +460,7 @@ class DanmakuStore:
             if not rows:
                 break
             for row in rows:
-                yield self._to_event(row)
+                yield self._to_event(row, with_raw=not slim)
 
     # ------------------------------------------------------------------ #
     # 历史浏览（V3-a）：游标分页 + 瘦投影 + 密度聚合
@@ -557,6 +680,8 @@ class DanmakuStore:
         since: float | None = None,
         until: float | None = None,
         include_types: Iterable[str] | None = None,
+        cancel_event: Any = None,
+        with_types: bool = False,
         **filters: Any,
     ) -> dict[str, Any]:
         """时间轴密度：把事件按 `bucket_s` 聚合成桶（V3-a 的时间轴数据源）。
@@ -573,6 +698,31 @@ class DanmakuStore:
         远小于事件数），把"表达式分组"这个唯一会触发临时 B 树的操作挪出 SQL。
 
         仍然**不**把事件搬到前端算 —— 那正是旧的 `iter_events(limit=20100)` 路径在干的事。
+
+        ## `cancel_event`：让这段折算**可以被叫停**（2026-10-09）
+
+        实测（`tools/probe_density_cost.py`）：单发 87 ms 里有 **54 ms 是这段 Python 折算**，
+        而它持 GIL ⇒ 并发请求超线性变慢（1→67ms、4→912ms、16→6.0s）。
+        前端的 `AbortController` 只断开 HTTP 连接，**停不掉**工作线程里的这活，
+        于是"用户超时后又点一下"会不断往后台堆查询（自增强雪崩）。
+
+        调用方传一个 `threading.Event` 进来（`server/app.py` 会在客户端断开时置位），
+        这里每读一批就查一次：置位了就**立刻收手**、返回已经算好的部分
+        并带 `cancelled: True`。真正的取消语义只能是"协作式"的 ——
+        线程没法被外部强杀，所以每分钟都要有一次"你还要吗"的机会。
+
+        ## `with_types`：**每个桶的类型明细默认不算**（2026-10-09）
+
+        实测（`tools/probe_density_fold.py`，真库 187.7 小时 / 31,190 行）：
+        每个桶都维护一个 `{type: count}` 嵌套 dict 要 **多花约 9 ms（−19%）**，
+        而**前端一处都没消费它**（`TypeBars` 用的是 `/api/stats.by_type`；
+        曲线与柱状都只用 `count`）。所以默认只算**扁平计数 + 顶层 by_type**，
+        桶里的 `by_type` 一律给 `null`（**键还在**，形状不变）；
+        真需要桶级明细的调用方显式传 `with_types=True`（老行为，供测试与将来用）。
+
+        同时把取数改成**位置取值**（绕开 `sqlite3.Row` 的构造）——
+        这两项合起来把折算从 ~48 ms 压到 ~34 ms（−27%），而这段正是并发时
+        抢 GIL 的部分（见 `tools/probe_density_cost.py` 的并发扫描）。
         """
         bucket_s = max(float(bucket_s), 0.001)
         clauses: list[str] = []
@@ -597,6 +747,13 @@ class DanmakuStore:
         buckets: dict[int, dict[str, Any]] = {}
         by_type_totals: dict[str, int] = {}
 
+        def cancelled() -> bool:
+            return cancel_event is not None and cancel_event.is_set()
+
+        # 还没开始就被叫停（客户端早走了）：直接回空，别再扫库
+        if cancelled():
+            return self._density_payload(buckets, by_type_totals, bucket_s, True)
+
         # 流式处理：`fetchmany` 而不是 `fetchall()` —— 20 万行的聚合结果仍有 2.5 万行，
         # 一次全取出没有意义；游标能配合索引顺序边读边折。
         cursor = self._conn.execute(
@@ -608,12 +765,21 @@ class DanmakuStore:
             if not rows:
                 break
             for row in rows:
-                key = int(float(row["recv_ts"]) / bucket_s)
-                entry = buckets.setdefault(key, {"ts": key * bucket_s, "count": 0, "by_type": {}})
-                count = int(row["n"])
-                type_name = row["type"]
-                entry["count"] += count
-                entry["by_type"][type_name] = entry["by_type"].get(type_name, 0) + count
+                # 位置取值（`row[0]`）比 `row["recv_ts"]` 快：`sqlite3.Row` 的按名取值
+                # 要走一次 mapping 查找，2~3 万行就是几毫秒（实测见 docstring）
+                key = int(float(row[0]) / bucket_s)
+                count = row[2]
+                type_name = row[1]
+                if with_types:
+                    entry = buckets.setdefault(key, {"ts": key * bucket_s, "count": 0, "by_type": {}})
+                    entry["count"] += count
+                    entry["by_type"][type_name] = entry["by_type"].get(type_name, 0) + count
+                else:
+                    entry = buckets.get(key)
+                    if entry is None:
+                        buckets[key] = {"ts": key * bucket_s, "count": count, "by_type": None}
+                    else:
+                        entry["count"] += count
                 by_type_totals[type_name] = by_type_totals.get(type_name, 0) + count
 
         # `range` 必须服从**同一套时间边界**，否则会出现
@@ -624,13 +790,35 @@ class DanmakuStore:
         lo, hi = self.time_range(
             **{**filters, "since": since, "until": until}
         )
-        return {
+        return self._density_payload(buckets, by_type_totals, bucket_s, cancelled(), lo=lo, hi=hi)
+
+    @staticmethod
+    def _density_payload(
+        buckets: dict[int, dict[str, Any]],
+        by_type_totals: dict[str, int],
+        bucket_s: float,
+        is_cancelled: bool,
+        *,
+        lo: float | None = None,
+        hi: float | None = None,
+    ) -> dict[str, Any]:
+        """把折算结果拼成响应（含 `cancelled` 标记）。
+
+        `cancelled: True` 表示"这次没算完就被叫停了"（客户端已经走了）——
+        调用方**不该**把它当成一份可信的密度数据用（例如别写进缓存）。
+        **只在被叫停时才加这个键**：正常响应的形状与从前**逐字一致**，
+        不给前端/契约增加无谓的字段。
+        """
+        payload: dict[str, Any] = {
             "bucket_s": bucket_s,
             "buckets": [buckets[key] for key in sorted(buckets)],
             "total": sum(entry["count"] for entry in buckets.values()),
             "by_type": dict(sorted(by_type_totals.items(), key=lambda kv: -kv[1])),
             "range": {"lo": lo, "hi": hi},
         }
+        if is_cancelled:
+            payload["cancelled"] = True
+        return payload
 
     @staticmethod
     def estimate_bucket_s(lo: float | None, hi: float | None, target: int = 240) -> float:
@@ -649,7 +837,7 @@ class DanmakuStore:
         return float(steps[-1])
 
     @staticmethod
-    def _to_event(row: sqlite3.Row) -> Event:
+    def _to_event(row: sqlite3.Row, *, with_raw: bool = True) -> Event:
         from .models import Medal
 
         medal = None
@@ -657,11 +845,15 @@ class DanmakuStore:
             medal = Medal(name=row["medal_name"], level=row["medal_level"])
 
         raw = None
-        if row["raw_json"]:
-            try:
-                raw = json.loads(row["raw_json"])
-            except ValueError:
-                raw = None
+        # `with_raw=False` 时**不带原始帧**（见 `iter_events` 的说明）；
+        # 需要取证就 `raw=1`。
+        #
+        # 这里**不再 `json.loads`**：`Event.raw` 存的就是 JSON 文本，
+        # 而库里 `raw_json` 列存的也是同一份文本，原样传下去即可。
+        # 于是"读回来"这条路径既省一次解析、也省下那棵 ~3 KB 的对象树
+        # （原先解析成 dict 只为了导出时再 `json.dumps` 一次，是纯粹的往返浪费）。
+        if with_raw and row["raw_json"]:
+            raw = row["raw_json"]
 
         extra: dict[str, Any] = {}
         # 旧库可能没有 extra_json 列（schema v1），此时 sqlite3.Row 会抛 IndexError

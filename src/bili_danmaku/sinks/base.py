@@ -30,6 +30,20 @@ class Sink(ABC):
     #: 唯一名称，同时用作 CLI `--format` 取值与统计 key
     name: str = "sink"
 
+    #: 本 sink 是否**把原始帧持久化下来**（`Event.raw`）。
+    #:
+    #: 背景：`Event` 对象在多个 sink 队列里是**共享引用**，
+    #: 而 `raw` 是它身上最大的一块（JSON 文本，约 0.9~3 KB/条）。既然它已经
+    #: 被写进库/文件，那条事件就不必再背着它 —— 及时放掉引用，队列里剩下的
+    #: 对象立刻变轻。
+    #:
+    #: 口径必须**保守**：`Bus` 只有在「本次所有 sink 都声明会持久化 raw」时
+    #: 才敢释放（见 `Bus._release_raw`）。只声明一个 sink 是不够的 ——
+    #: 多个 sink 并发消费同一批共享对象，谁先跑完就把 raw 清掉，
+    #: 后跑的 sink 就再也拿不到原始帧了。只要有一个 sink 不落 raw
+    #: （csv / txt），就宁可一直留着。
+    persists_raw: bool = False
+
     def __init__(self, config: Config) -> None:
         self.config = config
         self.stats = SinkStats()

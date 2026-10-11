@@ -15,13 +15,21 @@
  * 记忆也会清掉，不会把下一次也一起吞掉。
  */
 import { computed, ref, watch } from 'vue'
+import { attentionKey, needsReconnect as needsReconnectFor, needsRelogin as needsReloginFor } from './health.js'
 
 const props = defineProps({
-  /** `/api/health` 的 `attention`：`{level, title, detail, rooms}` */
+  /** `/api/health` 的 `attention`：`{level, title, detail, rooms, code, action}` */
   attention: { type: Object, default: null },
+  /**
+   * 外部要求**强制展开**（点顶栏常驻角标时）。
+   *
+   * 用一个自增的计数而不是布尔值：用户可能想反复点角标把横幅叫回来，
+   * 布尔值第二次不会再触发（值没变 → `watch` 不跑）。
+   */
+  revealKey: { type: Number, default: 0 },
 })
 
-const emit = defineEmits(['open-login'])
+const emit = defineEmits(['open-login', 'reconnect'])
 
 const dismissed = ref('')
 
@@ -31,12 +39,8 @@ const visible = computed(() => {
   return payload
 })
 
-/** 这条问题的稳定标识：换问题就该重新提示，同一个问题关掉后就别再弹。 */
-const key = computed(() => {
-  const payload = visible.value
-  if (!payload) return ''
-  return `${payload.level}|${payload.title}|${(payload.rooms ?? []).join(',')}`
-})
+/** 这条问题的稳定标识（判定逻辑在 `health.js`，那边可离线单测）。 */
+const key = computed(() => attentionKey(visible.value))
 
 // 问题消失（level 回到 ok）时清掉关闭记忆：
 // 否则"关掉过网络提示 → 后来又出了凭证失效"会因为 key 碰巧相同而被吞掉。
@@ -47,12 +51,32 @@ watch(
   },
 )
 
+// 点顶栏角标 = 让用户把横幅叫回来（覆盖之前的关闭记忆）
+watch(
+  () => props.revealKey,
+  (value) => {
+    if (value) dismissed.value = ''
+  },
+)
+
 const showBanner = computed(() => Boolean(visible.value) && key.value !== dismissed.value)
 
-/** 凭证失效时直接给一个入口（启动面板里能扫码登录）。 */
-const needsRelogin = computed(
-  () => visible.value?.level === 'alert' && /登录|凭证|认证/.test(visible.value.title),
-)
+/**
+ * 凭证失效时直接给一个入口（启动面板里能扫码登录）。
+ *
+ * 判据优先用后端给的 `action`（**机器可读**），实现在 `health.js` ——
+ * 正则匹配 `title` 的写法一改文案就会坏，而 `action === 'login'` 是契约。
+ */
+const needsRelogin = computed(() => needsReloginFor(visible.value))
+
+/**
+ * 自动重连已放弃时要给「手动重连」按钮（需求 2026-10-09）。
+ *
+ * 判据同样用后端的 `action === 'reconnect'`（见 `health.js`）。
+ * 与「去登录」**可能同时出现**：登录失效又恰好达上限时，两个按钮都给 ——
+ * 那条路径是"先登录、再重连"，只给一个会让人来回试。
+ */
+const needsReconnect = computed(() => needsReconnectFor(visible.value))
 
 function dismiss() {
   dismissed.value = key.value
@@ -71,6 +95,14 @@ function dismiss() {
         @click="emit('open-login')"
       >
         去登录
+      </button>
+      <button
+        v-if="needsReconnect"
+        class="health-action"
+        title="自动重连已暂停，点这里让这些房间立刻再连一次（网络恢复或重新登录之后用）"
+        @click="emit('reconnect', visible.rooms ?? [])"
+      >
+        手动重连
       </button>
       <button class="health-close" title="关闭本提示（下次出现别的问题会再提示）" @click="dismiss">×</button>
     </div>

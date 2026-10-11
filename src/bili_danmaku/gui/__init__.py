@@ -5,7 +5,7 @@
 * `qr_window.py` —— 扫码登录的**独立二维码窗口**（面板宽度固定，二维码会被裁掉）
 * `tray.py` —— 把上面两者与 `launcher.PanelController` 组装成托盘应用
 
-设计约束（DEC-6）：**只依赖标准库**（tkinter + ctypes + Pillow 只用于生成 ico）。
+设计约束：**只依赖标准库**（tkinter + ctypes + Pillow 只用于生成 ico）。
 """
 
 from __future__ import annotations

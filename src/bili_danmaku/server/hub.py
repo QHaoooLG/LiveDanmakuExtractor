@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,6 +42,29 @@ ANALYSIS_BUCKET_S = 60.0  # 时间片长度（热点突增按片比较）
 ANALYSIS_BUCKET_COUNT = 20  # 保留多少个时间片
 ANALYSIS_WORDS_PER_BUCKET = 2000  # 每片最多记多少个不同的词
 ANALYSIS_MESSAGES_PER_BUCKET = 400  # 每片最多留多少条弹幕原文
+
+#: 累计发言榜最多记多少个不同的 uid（见 `WebHub._prune_cumulative_uids`）。
+#: 实测 230 B/uid ⇒ 20000 个约 4.6 MB。**这是面板里唯一真正无界的结构的上限**。
+CUMULATIVE_UID_CAP = 20_000
+
+#: 累计 uid 表的裁剪间隔（秒）。限频是必需的：裁剪要排一次序，
+#: 若每条事件都判断"超没超"，超限后每条都会排一次（那是 O(n log n)／条）。
+CUMULATIVE_PRUNE_INTERVAL_S = 30.0
+
+#: 保留多少个房间的分析窗口（LRU）。面板同时最多监控 `general.max_rooms`（默认 3）个，
+#: 留 8 个是为了"停掉再重新添加"时还能用上旧基线（见 `_windows` 的说明）。
+HUB_WINDOW_ROOM_CAP = 8
+
+#: 实时订阅者（WS 客户端）数量上限。
+#:
+#: 每个订阅者一个 `DEFAULT_QUEUE_SIZE=500` 的有界队列，单条 payload 约 0.7 KB
+#: ⇒ 最坏约 1 MB/客户端。256 个 ≈ 256 MB，对"本机面板"这个定位已经绰绰有余
+#: （正常人只开一两个标签页）。**没有上限的话它是无界的**。
+DEFAULT_MAX_SUBSCRIBERS = 256
+
+
+class TooManySubscribers(RuntimeError):
+    """订阅者数量超过上限（见 `WebHub.subscribe`）。"""
 
 
 @dataclass(eq=False)
@@ -214,12 +237,18 @@ class WebHub:
         queue_size: int = DEFAULT_QUEUE_SIZE,
         buffer_size: int = DEFAULT_BUFFER_SIZE,
         slow_threshold: int = SLOW_CONSUMER_DROPS,
+        max_subscribers: int = DEFAULT_MAX_SUBSCRIBERS,
     ) -> None:
         self._queue_size = queue_size
         self._buffer_size = buffer_size
         self._slow_threshold = slow_threshold
+        #: 订阅者数量上限（见 `subscribe`）
+        self.max_subscribers = max(int(max_subscribers), 1)
         self._subscribers: set[Subscriber] = set()
-        self._buffers: dict[int, deque[str]] = {}
+        #: room_id → 最近的 `data` 记录（**dict，不是 JSON 串**）。
+        #: 存 dict 是为了让零订阅者时不必编码；
+        #: 发给客户端时用 `encode_event()`。
+        self._buffers: dict[int, deque[dict[str, Any]]] = {}
         self.published = 0
         #: 自 hub 创建（= 面板启动）以来的累计统计
         self.started_at = time.time()
@@ -227,9 +256,29 @@ class WebHub:
         self.cumulative_by_type: dict[str, int] = {}
         self.cumulative_by_room: dict[int, int] = {}
         self.cumulative_by_room_type: dict[int, dict[str, int]] = {}
+        #: 「发言榜」的内存累计（2026-10-09 新增，见 `cumulative_top_senders`）。
+        #:
+        #: 为什么要有：不带 `room_id` 的 `GROUP BY uid` 查询在 1 GB 库上要 2.6~35 秒
+        #: （`recv_ts >= ?` 没有可用索引，退化成走 uid 索引 + 每行回表），而它跑在
+        #: 事件循环上 ⇒ **整个面板卡死**（实测 `/api/health` 从 21 ms 被拖到 2412 ms）。
+        #: 累计口径本来就是"本次运行以来"，hub 手里正好有全量事件 ⇒ 直接计数。
+        #: 代价：每个 uid 一条计数 + 一个昵称（实测万级 uid 约几 MB，可接受）。
+        self.cumulative_by_uid: dict[int, int] = {}
+        self.cumulative_uname: dict[int, str] = {}
+        #: 累计发言榜的 uid 上限（见 `_prune_cumulative_uids`）。
+        #: 实测 230 B/uid ⇒ 20000 个约 4.6 MB，是有界的常驻开销。
+        self.cumulative_uid_cap = CUMULATIVE_UID_CAP
+        #: 上次裁剪的时刻（限频：每 `CUMULATIVE_PRUNE_INTERVAL_S` 秒最多裁一次，
+        #: 否则每条事件都可能在超限时排一次序）
+        self._last_uid_prune = 0.0
         #: 感知分析（V3-b 3A）的有界窗口：room_id → LiveWindow。
         #: 只覆盖**已监控过的房间**（房间移除后保留，重新添加时还能用旧基线）。
-        self._windows: dict[int, LiveWindow] = {}
+        #:
+        #: **但有上限**：原实现是"永不删除"，于是"监控过 N 个房间"
+        #: 就沉淀 N 份窗口（每份含 1200 条弹幕 + 20 个词表），长期运行只增不减。
+        #: 这里改成 LRU，容量 `HUB_WINDOW_ROOM_CAP`（8，远大于默认 max_rooms=3）：
+        #: 既能保住"停掉再添加还能用旧基线"，又不会无限沉淀。
+        self._windows: dict[int, LiveWindow] = OrderedDict()
 
     def window(self, room_id: int) -> LiveWindow:
         """取某个房间的分析窗口（不存在则建一个空的）。
@@ -242,7 +291,31 @@ class WebHub:
         if window is None:
             window = LiveWindow()
             self._windows[room_id] = window
+            self._evict_stale_windows()
+        else:
+            self._windows.move_to_end(room_id)
         return window
+
+    def _evict_stale_windows(self) -> list[int]:
+        """把 `_windows` 压回容量上限，返回被淘汰的房间号。"""
+        evicted: list[int] = []
+        while len(self._windows) > HUB_WINDOW_ROOM_CAP:
+            room_id, _ = self._windows.popitem(last=False)
+            evicted.append(room_id)
+        if evicted:
+            log.debug("分析窗口超出上限，淘汰最久未用的房间: %s", evicted)
+        return evicted
+
+    def drop_room(self, room_id: int) -> bool:
+        """房间被移除时清掉它的内存态（分析窗口 + 广播环形缓冲）。
+
+        **为什么必须清**：不监控了却还留着 1200 条弹幕原文 + 2000 条 JSON payload，
+        用户"换个房间看看"时就一路沉淀下去。返回是否真的清了东西。
+        """
+        dropped = self._windows.pop(room_id, None) is not None
+        if self._buffers.pop(room_id, None) is not None:
+            dropped = True
+        return dropped
 
     def window_snapshot(self, room_id: int | None = None) -> tuple[list[dict[str, Any]], list[Any]]:
         """取分析快照 `(messages, buckets)`；`room_id=None` 时合并全部房间。
@@ -283,8 +356,82 @@ class WebHub:
         self.cumulative_by_type = {}
         self.cumulative_by_room = {}
         self.cumulative_by_room_type = {}
+        self.cumulative_by_uid = {}
+        self.cumulative_uname = {}
+        self._last_uid_prune = 0.0
         for window in self._windows.values():
             window.reset()
+
+    def _prune_cumulative_uids(self) -> int:
+        """把累计 uid 表**压回上限**，返回淘汰了多少个 uid。
+
+        ## 为什么必须压
+
+        `cumulative_by_uid` / `cumulative_uname` 每个**不同观众**占一条，
+        实测 **230 B/uid** ⇒ 100 万 uid 约 **219 MiB**，
+        而且面板开得越久、房间越热，它就越大。原注释猜"万级 uid 约几 MB"，
+        万级确实只有几 MB，但**高热房间跑一整天是百万级**，差了 100 倍。
+        这是整个面板唯一真正**无界**的结构。
+
+        ## 口径：保留 **发言最多的前 N 个 uid**
+
+        面板只用它做"发言 TOP N"（`cumulative_top_senders`，默认 `limit=10`），
+        所以给重发言者留位、把长尾淘汰掉，正好符合用途。
+
+        ## 代价（如实记录）
+
+        被淘汰的 uid 若之后再发言，计数会**从头开始**（显示为偏小）。
+        这是"内存有界"必须付的代价，而且只影响长尾里那些本来也进不了 TOP 的账号。
+        排行榜的头部不会受影响 —— 头部发言多，裁剪时按计数排序必然保得住。
+        """
+        kept = self.cumulative_uid_cap
+        if len(self.cumulative_by_uid) <= kept:
+            return 0
+        # 按"发言数降序、uid 升序"取前 kept 个，与 `cumulative_top_senders` 同口径
+        survivors = sorted(
+            self.cumulative_by_uid.items(), key=lambda item: (-item[1], item[0])
+        )[:kept]
+        removed = len(self.cumulative_by_uid) - kept
+        self.cumulative_by_uid = dict(survivors)
+        self.cumulative_uname = {
+            uid: self.cumulative_uname[uid]
+            for uid, _ in survivors
+            if uid in self.cumulative_uname
+        }
+        log.debug("累计发言榜已裁剪：淘汰 %d 个长尾 uid，保留 %d 个", removed, kept)
+        return removed
+
+    def cumulative_top_senders(self, limit: int = 10) -> list[dict[str, Any]]:
+        """**累计口径**的发言榜（"自本次运行以来"）—— 完全来自内存计数，零查询。
+
+        ## 为什么不用 SQL（2026-10-09 实测，这是"面板卡死"的元凶）
+
+        不带 `room_id` 时 `store.top_senders()` 的 SQL 是
+        `WHERE recv_ts >= ? ... GROUP BY uid ORDER BY COUNT(*) DESC`：
+
+        * `recv_ts >= ?` **用不上**任何索引（`idx_event_room_ts*` 的最左列是 `room_id`）；
+        * 规划器于是退回 `SEARCH event USING INDEX idx_event_uid` + 每行回表
+          + `TEMP B-TREE`（实测：库里 244,036 行、1 GB ⇒ **2.6 s（热）/ 35 s（冷）**；
+          带 `room_id` 的同一条只要 **0.2 ms**）。
+
+        而它跑在**事件循环**上（面板里所有 SQLite 调用都是同步的）⇒ 查询期间
+        整个面板停摆（实测 `/api/health` 从 21 ms 被拖到 2412 ms），
+        再叠加"前端每 3 秒拉一次 + 默认不选房间"⇒ 界面持续卡死。
+
+        ⚠️ **给 `event(recv_ts)` 加单列索引解决不了**：实测规划器仍然选
+        `idx_event_uid`（建索引前后 188 ms vs 184 ms，计划一模一样）。
+        所以这里换**数据来源**（内存），而不是继续调 SQL。
+
+        `uname` 取"最后一次非空"的昵称（SQL 那边是 `MAX(uname)`；展示口径等价）。
+        """
+        top = sorted(
+            self.cumulative_by_uid.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[: max(int(limit), 0)]
+        return [
+            {"uid": uid, "uname": self.cumulative_uname.get(uid), "count": count}
+            for uid, count in top
+        ]
 
     @property
     def cumulative(self) -> dict[str, Any]:
@@ -322,6 +469,22 @@ class WebHub:
         rooms: set[int] | None = None,
         keyword: str | None = None,
     ) -> Subscriber:
+        """登记一个订阅者（WS 客户端）。
+
+        ## 为什么要上限
+
+        每个订阅者持有一个有界队列（`DEFAULT_QUEUE_SIZE=500` 条 payload，
+        单条约 0.7 KB ⇒ 每个订阅者最坏约 **1 MB**）。队列本身是有界的，
+        但**订阅者数量此前没有任何上限** —— 1000 个客户端就是约 1 GB。
+
+        超限时**抛 `TooManySubscribers`** 而不是静默挤掉一个老客户端：
+        调用方（WS 端点）据此回一条明确的错误并关闭连接，
+        比"莫名其妙把自己或别人踢下线"好排障得多。
+        """
+        if len(self._subscribers) >= self.max_subscribers:
+            raise TooManySubscribers(
+                f"实时订阅已达上限 {self.max_subscribers} 个（每个客户端约占用 1 MB 缓冲）"
+            )
         subscriber = Subscriber(
             queue=asyncio.Queue(maxsize=self._queue_size),
             want_types=frozenset(types) if types else None,
@@ -363,15 +526,41 @@ class WebHub:
 
     def publish(self, event: Event) -> None:
         """同步投递，绝不阻塞、绝不抛异常。"""
+        subscribers = list(self._subscribers)
+
+        # **没有任何订阅者时不付 `json.dumps` 的代价**。
+        #
+        # 面板"在采集、但没人打开实时视图"是常见状态（用户关掉标签页、或只看
+        # 历史/统计）。`json.dumps` 是这条路径上最贵的一步（每条要序列化一份
+        # 完整 `data` 并转义中文）。
+        #
+        # 但 `model_dump` **仍然要做**，因为环形缓冲必须照常维护：两个读它的人
+        # 都与"当前有没有订阅者"无关 ——
+        #   * WS 新连接的**历史回填**（先 publish 再连接是常见顺序）；
+        #   * 没有 SQLite 时 `/api/events` 的**内存降级路径**（`_memory_events`）。
+        # 所以这里只把**编码**推迟：缓冲直接存 `record`（dict），
+        # 只有真的要扇出给订阅者时才 `encode_event()`。
+        #
+        # 形状没有任何变化：`record` 与原来喂给 `json.dumps` 的是同一个对象
+        # （仍排除 `raw`），`recent()` 返回 dict、
+        # WS 回填改用 `encode_event()` —— 帧内容逐字相同。
         try:
-            record = event.model_dump(mode="json")
-            payload = json.dumps({"t": "event", "data": record}, ensure_ascii=False)
+            # **广播不带 `raw`**。
+            #
+            # `raw` 是原始协议帧，只用于**事后取证**（见 `models.Event.raw`），
+            # `web/src` 里没有任何一处读它（已 grep 确认）。而这条记录会被
+            # 存进每个房间的环形缓冲（`maxlen=2000`）并扇出给所有订阅者 ——
+            # 不排除的话，每个房间白白驻留 2000 份原始帧。
+            #
+            # 过滤只看顶层字段（`accepts()` 读 `room_id`/`type`/`text`），
+            # 所以排除 `raw` 不影响任何订阅过滤语义。
+            record = event.to_dict(exclude_raw=True)
         except (TypeError, ValueError) as exc:  # pragma: no cover - 模型应始终可序列化
             log.warning("事件序列化失败: %s", exc)
             return
 
         buffer = self._buffers.setdefault(event.room_id, deque(maxlen=self._buffer_size))
-        buffer.append(payload)
+        buffer.append(record)
         self.published += 1
 
         # 分析窗口（V3-b 3A）：`add()` 是 O(1) 且有界，可以放在热路径上。
@@ -383,8 +572,28 @@ class WebHub:
         self.cumulative_by_room[event.room_id] = self.cumulative_by_room.get(event.room_id, 0) + 1
         room_counts = self.cumulative_by_room_type.setdefault(event.room_id, {})
         room_counts[event.type] = room_counts.get(event.type, 0) + 1
+        # 发言榜的**内存累计**（见 `cumulative_top_senders`）：只认有 uid 的发言，
+        # `uid=0` 是"被打码的匿名用户"，与 `store.top_senders(uid != 0)` 口径一致。
+        uid = event.uid
+        if uid:
+            self.cumulative_by_uid[uid] = self.cumulative_by_uid.get(uid, 0) + 1
+            name = event.uname
+            if name:
+                self.cumulative_uname[uid] = name
+            # 有界化：超过上限就压回前 N 个（限频，见 `_prune_cumulative_uids`）
+            if len(self.cumulative_by_uid) > self.cumulative_uid_cap:
+                moment = time.monotonic()
+                if moment - self._last_uid_prune >= CUMULATIVE_PRUNE_INTERVAL_S:
+                    self._last_uid_prune = moment
+                    self._prune_cumulative_uids()
 
-        for subscriber in list(self._subscribers):
+        # 零订阅者：上面该做的都做完了（缓冲已维护），**不必编码**。
+        # 这正是零订阅者时省下的那一步。
+        if not subscribers:
+            return
+
+        payload = self.encode_event(record)
+        for subscriber in subscribers:
             if not self.accepts(subscriber, record):
                 continue
             try:
@@ -413,13 +622,28 @@ class WebHub:
                 subscriber.dropped += 1
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def encode_event(record: dict[str, Any]) -> str:
+        """把一条 `data` 记录编成发给前端的 WS 帧。
+
+        `publish()` 与 `recent()` 共用一个出口，保证**实时推送与历史回填的帧
+        形状完全一致**（否则新连接与老连接会看到两种 `data`）。
+        """
+        return json.dumps({"t": "event", "data": record}, ensure_ascii=False)
+
     def recent(
         self,
         room_id: int | None = None,
         limit: int = 200,
         accept: Callable[[dict[str, Any]], bool] | None = None,
-    ) -> list[str]:
-        """取最近事件的原始 JSON 串（供新连接回填）。
+    ) -> list[dict[str, Any]]:
+        """取最近事件的 **`data` 记录**（供新连接回填）。
+
+        返回 dict 而不是 JSON 串：环形缓冲现在**直接持有 dict**，
+        于是没有订阅者时热路径不必为"没人读的缓冲"付一次 `json.dumps`
+        （见 `publish` 的说明）。需要发给客户端时用 `encode_event()`，
+        调用方（WS 回填）本来就要把它写进 socket，所以这里只挪了一次编码的位置，
+        并没有增加总工作量。
 
         `accept` 用于把订阅者的过滤条件也作用到回填上 —— 否则新连上的客户端
         会先收到一批它并不想看的类型。
@@ -428,7 +652,7 @@ class WebHub:
             buffer = self._buffers.get(room_id)
             items = list(buffer) if buffer else []
         else:
-            merged: list[str] = []
+            merged: list[dict[str, Any]] = []
             for buffer in self._buffers.values():
                 merged.extend(buffer)
             items = merged
@@ -436,14 +660,12 @@ class WebHub:
         if accept is None:
             return items[-limit:]
 
-        picked: list[str] = []
-        for raw in reversed(items):
-            try:
-                record = json.loads(raw).get("data") or {}
-            except ValueError:
+        picked: list[dict[str, Any]] = []
+        for record in reversed(items):
+            if not isinstance(record, dict):
                 continue
             if accept(record):
-                picked.append(raw)
+                picked.append(record)
                 if len(picked) >= limit:
                     break
         picked.reverse()

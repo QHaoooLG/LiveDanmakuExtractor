@@ -1,6 +1,6 @@
 """B 站 HTTP 接口封装。
 
-关键设计（基于对房间 804456 的真实实测）：
+关键设计（基于对直播间 804456 的真实实测）：
     * `Danmu/getConf` 匿名可用，是保底路径（实测返回 token + 节点并成功握手）。
     * `getDanmuInfo` 匿名一律返回 -352 风控，因此仅在登录态下尝试，
       失败即降级且**不重试**（重试会加重风控）。
@@ -153,7 +153,16 @@ class BiliApi:
                 response = await self.client.get(url, params=params)
             except httpx.HTTPError as exc:
                 last_error = exc
-                log.warning("请求失败(%d/%d) %s: %s", attempt + 1, attempts, url, exc)
+                # 一定要带上**异常类型名**：httpx 的超时/连接类异常 `str()` 常常是空串
+                # （实测日志里只剩 `请求失败(1/1) <url>: `，完全看不出是超时还是拒绝连接）。
+                log.warning(
+                    "请求失败(%d/%d) %s: %s: %s",
+                    attempt + 1,
+                    attempts,
+                    url,
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
 
             if response.status_code >= 500:

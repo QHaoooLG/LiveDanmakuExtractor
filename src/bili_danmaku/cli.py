@@ -130,7 +130,7 @@ async def _ensure_buvid(config: Config, creds: Credentials) -> Credentials:
 @click.option("--no-open", is_flag=True, help="不自动打开浏览器")
 @click.option(
     "--no-start", is_flag=True,
-    help="只起托盘不启动采集（双击 exe 的默认行为；见 DEC-6/D4）",
+    help="只起托盘不启动采集（双击 exe 的默认行为）",
 )
 @click.pass_context
 def tray_command(
@@ -183,7 +183,7 @@ def main(ctx: click.Context, config_path: str | None, verbose: int) -> None:
     if ctx.invoked_subcommand is None:
         if getattr(sys, "frozen", False):
             # 双击 exe：只起托盘 + 显示启动面板，**不自动开始采集**
-            # （房间号未定时不该猜）—— 见 DEC-6 / D4。
+            # （房间号未定时不该猜）。
             ctx.invoke(
                 tray_command, rooms=None, port=None, out_dir=None,
                 no_open=True, no_start=True,
@@ -409,7 +409,7 @@ async def _run_probe(
                     Counter(str(m.get("cmd", "")).split(":")[0] for m in collected)
                 ),
                 "parsed_events": [
-                    event.model_dump(exclude={"raw"})
+                    event.to_dict(exclude_raw=True)
                     for event in (
                         parse_message(m, room_info, 0.0, keep_raw=False) for m in collected
                     )
@@ -549,7 +549,6 @@ def _resolve_deadline(duration: str, until: str | None) -> float | None:
 )
 @click.option("--uid", "include_uids", multiple=True, type=int, help="只看这些 uid，可重复")
 @click.option("--exclude-uid", "exclude_uids", multiple=True, type=int, help="排除这些 uid，可重复")
-@click.option("--min-price", type=int, default=None, help="最低金额（只对礼物/SC/上舰生效）")
 @click.option("--min-medal-level", type=int, default=None, help="最低粉丝牌等级")
 @click.option("--exclude-masked", is_flag=True, help="丢弃被平台打码的身份（uid=0 或昵称含 ***）")
 @click.option(
@@ -576,7 +575,6 @@ def grab(
     keyword_mode: str,
     include_uids: tuple[int, ...],
     exclude_uids: tuple[int, ...],
-    min_price: int | None,
     min_medal_level: int | None,
     exclude_masked: bool,
     content_only: bool | None,
@@ -613,7 +611,6 @@ def grab(
         keyword_mode=keyword_mode,
         include_uids=include_uids,
         exclude_uids=exclude_uids,
-        min_price=min_price,
         min_medal_level=min_medal_level,
         exclude_masked=exclude_masked,
         content_only=config.general.content_only,
@@ -842,7 +839,9 @@ def _print_stats(report: dict[str, Any]) -> None:
             click.echo(f"  {index:2d}. {item['uname'] or '匿名':24s} {item['count']:6d} 条")
 
     if report.get("priced"):
-        click.secho("\n金额汇总（按类型，单位见采集时的 price_unit）", bold=True)
+        # 各类型的 `price` 单位本来就不一样（SC 是元、礼物/上舰是金瓜子），
+        # 所以这里**只按类型分开列**、不做换算相加。
+        click.secho("\n金额汇总（按类型，直接取库里的 price；SC 为元，礼物/上舰为金瓜子）", bold=True)
         for item in report["priced"]:
             click.echo(f"  {item['type']:16s} 合计 {item['total_price']:>10}　{item['count']} 笔")
 
@@ -874,7 +873,7 @@ def _write_records(handle: Any, records: Any, fmt: str) -> int:
             written += 1
     else:  # jsonl
         for event in records:
-            handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False) + "\n")
+            handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
             written += 1
     return written
 
@@ -1003,7 +1002,7 @@ def replay(
                     click.secho(f"  跳过第 {line_no} 行：不是合法 JSON", fg="yellow", err=True)
                     continue
                 try:
-                    event = Event.model_validate(payload)
+                    event = Event.from_dict(payload)
                 except Exception as exc:  # noqa: BLE001 - 单行坏了不该中断整体转换
                     click.secho(f"  跳过第 {line_no} 行：{exc}", fg="yellow", err=True)
                     continue
@@ -1225,19 +1224,14 @@ def _iter_jsonl_texts(path: str | Path, *, limit: int | None = None):
 # sc（V2-b）：Super Chat 汇总 / 告警
 # --------------------------------------------------------------------------- #
 
-#: SC 金额单位换算：B 站 SC 的 `price` 字段单位是**元**。
-#: 依据：协议里 SC 价格是 30/50/100/500/1000/2000 元这类整数档，
-#: 与 `--min-price 30` 的语义一致；礼物/上舰才是金瓜子（1000 = 1 元）。
+#: SC 金额显示单位：B 站 SC 的 `price` 字段单位是**元**。
+#: 依据：协议里 SC 价格是 30/50/100/500/1000/2000 元这类整数档。
 #:
 #: ⚠️ **这一条尚未用真实 SC 样本验证**（实测蹲了 3 个高热度房间 4 分钟，一条 SC 都没出现）。
-#: 如果拿到真实样本发现差了 1000 倍，用 `--price-unit milli` 覆盖即可 ——
-#: 不必改代码（见 `_SC_UNIT_SCALE`）。
+#: 单看报表就能发现量级不对（30 / 30000 一眼可辨），所以**保留这个警告**，
+#: 但不再提供 `--price-unit` 逃生舱 —— 那个开关当年是为"按金额过滤"服务的，
+#: 而金额过滤已随需求 2026-10-07 #4 整体删除（见 `filters.py` 的说明）。
 SC_PRICE_UNIT = "元"
-
-#: `--price-unit` 的取值 → 存储值换算到「元」的除数。
-#: 语义是"**存进库里的 price 是什么单位**"：
-#: `yuan` 表示存的就是元（默认假设），`milli` 表示存的是毫元（需 ÷1000）。
-_SC_UNIT_SCALE = {"yuan": 1, "milli": 1000}
 
 
 def run_sc(
@@ -1248,23 +1242,14 @@ def run_sc(
     session_id: str | None,
     since: float | None,
     until: float | None,
-    min_price: int | None,
     limit: int | None,
     top: int,
     as_json: bool,
-    price_unit: str = "yuan",
 ) -> dict[str, Any]:
     """从 SQLite 汇总 SC，返回报告字典（便于单测直接调用）。
 
-    `min_price` 的门槛单位是**元**；`price_unit` 说明库里 `price` 的单位
-    （`yuan` 默认 / `milli` 毫元），换算后再比较。
-    金额比较用 Python 做而不是下推到 SQL：SC 条数很少，
-    而且 `DanmakuStore._build_where` 只支持等值与 LIKE。
+    金额直接按库里存的值展示（不再做单位换算、也不按金额过滤）。
     """
-    scale = _SC_UNIT_SCALE.get(price_unit)
-    if scale is None:
-        raise ValueError(f"未知 --price-unit: {price_unit}（支持 yuan / milli）")
-
     scope: dict[str, Any] = {
         "session_id": session_id,
         "room_id": room_id,
@@ -1274,11 +1259,7 @@ def run_sc(
     }
     events = list(store.iter_events(**scope))
 
-    priced: list[tuple[Event, float]] = [
-        (event, (event.price or 0) / scale) for event in events
-    ]
-    if min_price is not None:
-        priced = [(event, yuan) for event, yuan in priced if yuan >= min_price]
+    priced: list[tuple[Event, float]] = [(event, event.price or 0) for event in events]
 
     priced.sort(key=lambda item: item[0].recv_ts)
     if limit is not None and limit > 0:
@@ -1304,14 +1285,12 @@ def run_sc(
     return {
         "db": str(store.path),
         "unit": SC_PRICE_UNIT,
-        "price_unit": price_unit,
         "count": len(priced),
         "total_price": total,
         "max_price": max(amounts) if amounts else 0,
         "avg_price": round(total / len(amounts), 1) if amounts else 0.0,
         "first_ts": priced[0][0].recv_ts if priced else None,
         "last_ts": priced[-1][0].recv_ts if priced else None,
-        "min_price": min_price,
         "filters": {
             "session": session_id,
             "room": room_id,
@@ -1359,10 +1338,6 @@ def print_sc_report(report: dict[str, Any], *, top: int = 10, show_items: int = 
         f"单条最高    {format_amount(report['max_price'])} {unit}　"
         f"平均 {format_amount(report['avg_price'])} {unit}"
     )
-    if report.get("price_unit") and report["price_unit"] != "yuan":
-        click.echo(f"金额单位    price 按 {report['price_unit']} 解读（已换算成{unit}）")
-    if report.get("min_price") is not None:
-        click.echo(f"金额门槛    >= {format_amount(report['min_price'])} {unit}")
     if report["count"]:
         start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(report["first_ts"]))
         end = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(report["last_ts"]))
@@ -1409,13 +1384,16 @@ async def _run_sc_follow(
     config: Config,
     room: str,
     *,
-    min_price: int,
     duration: float | None,
     until: str | None,
     bell: bool,
     cookie_file: str | None,
 ) -> int:
-    """实时跟随一个房间，把 >= min_price 的 SC 打成告警行。"""
+    """实时跟随一个房间，把**每一条** SC 打成告警行。
+
+    没有金额门槛（需求 2026-10-07 #4 删掉了 `--min-price`）：告警行里本来就带
+    金额与正文，是否需要"只看高额"由用户自己扫一眼决定，不必让程序先替他筛。
+    """
     from .collector import RoomCollector
     from .filters import build_filter
     from .sinks import Bus, Sink
@@ -1427,15 +1405,13 @@ async def _run_sc_follow(
     class AlertSink(Sink):
         """只接收并打印告警；**不落盘** —— 用户要的是告警，不是再存一份。
 
-        类型白名单已经在 collector 的过滤层做了（只放 `super_chat` 进来），
-        这里再按金额门槛筛一遍：金额比较不是过滤层的能力（见 `filters.py`）。
+        类型白名单已经在 collector 的过滤层做了（只放 `super_chat` 进来）。
         """
 
         name = "sc-alert"
 
-        def __init__(self, cfg: Config, threshold: int, ring: bool) -> None:
+        def __init__(self, cfg: Config, ring: bool) -> None:
             super().__init__(cfg)
-            self.threshold = threshold
             self.ring = ring
             self.hits = 0
 
@@ -1443,15 +1419,13 @@ async def _run_sc_follow(
             for event in events:
                 if event.type != "super_chat":
                     continue
-                if (event.price or 0) < self.threshold:
-                    continue
                 self.hits += 1
                 click.secho(sc_alert_line(event), fg="magenta", bold=True)
                 if self.ring:
                     click.echo("\a", nl=False)
             self.record(len(events))
 
-    sink = AlertSink(config, min_price, bell)
+    sink = AlertSink(config, bell)
     bus = Bus([sink], config)
 
     async with BiliApi(config, creds) as api:
@@ -1467,8 +1441,7 @@ async def _run_sc_follow(
             seed_history=False,  # 跟踪只看新消息，不复述历史
         )
         click.secho(
-            f"开始跟踪房间 {resolved.room_id} 的 SC："
-            f"阈值 >= {min_price} {SC_PRICE_UNIT}，Ctrl+C 停止",
+            f"开始跟踪房间 {resolved.room_id} 的 SC（每一条都报），Ctrl+C 停止",
             fg="cyan",
         )
         try:
@@ -1487,21 +1460,8 @@ async def _run_sc_follow(
 @click.option("--until", default=None, help="跟踪到今天指定时刻，如 23:00")
 @click.option("--since", default=None, help="汇总起始时间：时间戳或 'YYYY-MM-DD HH:MM:SS'")
 @click.option("--until-time", "until_time", default=None, help="汇总结束时间（避免与跟踪的 --until 混淆）")
-@click.option(
-    "--min-price",
-    type=int,
-    default=None,
-    help=f"金额门槛（单位：{SC_PRICE_UNIT}；汇总时过滤，跟踪时只报不低于它的）",
-)
 @click.option("--top", type=int, default=10, show_default=True, help="贡献榜条数")
 @click.option("--limit", type=int, default=None, help="只看最近 N 条")
-@click.option(
-    "--price-unit",
-    type=click.Choice(["yuan", "milli"]),
-    default="yuan",
-    show_default=True,
-    help="库里 price 字段的单位（yuan=元；milli=毫元，遇到 1000 倍偏差时用）",
-)
 @click.option("--json", "as_json", is_flag=True, help="以 JSON 输出")
 @click.option("--bell", is_flag=True, help="告警时响铃（仅 --follow）")
 @click.option("--cookie-file", type=click.Path(dir_okay=False), default=None, help="凭据文件路径")
@@ -1517,10 +1477,8 @@ def sc_cmd(
     until: str | None,
     since: str | None,
     until_time: str | None,
-    min_price: int | None,
     top: int,
     limit: int | None,
-    price_unit: str,
     as_json: bool,
     bell: bool,
     cookie_file: str | None,
@@ -1529,15 +1487,16 @@ def sc_cmd(
 
     汇总（默认）：从 SQLite 统计 `super_chat` 的条数、金额合计、贡献榜与最近明细。
 
-        bili-danmaku sc --room 23438368 --min-price 30
+        bili-danmaku sc --room 23438368
         bili-danmaku sc --session 20260928-120000-23438368 --json
 
-    实时告警：跟一个房间，把达到金额门槛的 SC 打成醒目告警行（不落盘）。
+    实时告警：跟一个房间，把**每一条** SC 打成醒目告警行（不落盘）。
 
-        bili-danmaku sc 23438368 --follow --min-price 30 --duration 3600 --bell
+        bili-danmaku sc 23438368 --follow --duration 3600 --bell
 
     **金额单位是元**（SC 的 `price` 本身就是元；礼物/上舰才是金瓜子，1000 = 1 元）。
-    这一条还没用真实 SC 样本验证过；若实测发现差 1000 倍，加 `--price-unit milli`。
+    这一条还没用真实 SC 样本验证过 —— 量级不对时看输出即可判断，没有换算开关
+    （`--price-unit` 与 `--min-price` 已随需求 2026-10-07 #4 删除）。
     """
     config = _build_config(ctx)
 
@@ -1550,7 +1509,6 @@ def sc_cmd(
             _run_sc_follow(
                 config,
                 target,
-                min_price=min_price or 0,
                 duration=duration,
                 until=until,
                 bell=bell,
@@ -1568,11 +1526,9 @@ def sc_cmd(
             session_id=session_id,
             since=_parse_time(since),
             until=_parse_time(until_time),
-            min_price=min_price,
             limit=limit,
             top=top,
             as_json=as_json,
-            price_unit=price_unit,
         )
     finally:
         store.close()

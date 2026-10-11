@@ -27,25 +27,34 @@ export const BUCKET_CHOICES = [
 export const MIN_SLOT_PX = 14
 
 /**
- * 超过这么多格就**横向可滚动**。
+ * 滚动条滑块的**最小宽度**（px）。
  *
- * 与 `DENSE_BARS`（放弃保底宽度、等比压扁）配合使用：
- *   * `<= DENSE_BARS`：铺满容器，每格自适应宽度；
- *   * `DENSE_BARS < n <= SCROLL_BARS`：等比压扁（格子很小但**都在视野内**）；
- *   * `> SCROLL_BARS`：给每格一个可点宽度的下限，让整体可横向滚动 ——
- *     把几百格压成 1px 是没法用的（既看不清也点不准），滚动才是正确的退路。
+ * 不加下限的话，内容一长滑块就只有几像素 —— 鼠标抓不住、也没法判断它在哪。
+ * 36px 差不多是"一眼看得见、一手抓得住"的下限。
  */
-export const SCROLL_BARS = 600
+export const MIN_THUMB_PX = 36
 
 /**
- * 桶数过多时切成"密集"渲染。
+ * 超过这么多格就**横向可滚动**（需求方指定的策略：**60 格**）。
  *
- * 每格都有保底宽度（为了让空格子也点得中），但整库按 1 分钟聚合会有成千个桶，
- * 保底总宽一定超出面板 —— 多出来的格子被盖住，用户既看不到也点不到。
- * 阈值 400：后端自适应档的目标约 240 桶（`estimate_bucket_s(target=240)`），
- * 留出余量后自适应结果不会被误判成密集。
+ * 为什么是 60：一屏看得清的柱子大约就是这个量级。再多只有两种下场 ——
+ * 每格被压到看不清（根本点不准），或者整屏密密麻麻看不出趋势。
+ * 而"1 分钟档 × 2 小时采集"恰好 120 格，是最常见的用法之一，
+ * 所以阈值必须比它低。
+ *
+ * ⚠️ **必须大于 `DENSE_BARS`**，否则"密集压扁"那档永远轮不到（见 `slotGeometry`）。
  */
-export const DENSE_BARS = 400
+export const SCROLL_BARS = 60
+
+/**
+ * 桶数超过这么多就"放弃保底宽度、等比压扁"（见 `slotGeometry`）。
+ *
+ * 阈值 50（略低于 `SCROLL_BARS`）：这一档只在"容器极窄、格数又不多"时兜底，
+ * 因为 60 格以上已经走可滚动分支了。原来它是 400 > `SCROLL_BARS`(600) 才勉强
+ * 成立的，把 `SCROLL_BARS` 压到 60 时必须**同步把它压下来** ——
+ * 否则 `dense` 永远为假，那个分支成了死代码。
+ */
+export const DENSE_BARS = 50
 
 function pad2(value) {
   return String(value).padStart(2, '0')
@@ -63,6 +72,18 @@ export function formatDay(ts) {
   return `${date.getMonth() + 1}/${date.getDate()} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
 
+/**
+ * 时间轴**刻度**的文案：按轴跨度决定要不要带日期。
+ *
+ * ⚠️ 这是个实测缺陷的修法：曲线曾经无条件用 `formatStamp`（只有
+ * 时分秒），于是当轴跨了 8.85 天、刻度步长是 1 天时，**8 个刻度全是 `08:00:00`**
+ * —— 标签完全失去信息量（用户看到的就是"刻度坏了"）。
+ * 跨天时必须把日期带上（`9/30 08:00`），一天之内才用纯时分秒。
+ */
+export function formatTick(ts, spanS) {
+  return Number(spanS) > 86400 ? formatDay(ts) : formatStamp(ts)
+}
+
 /** 该格的**时间区间**（`13:10:00–13:15:00`），悬停时比只给起点清楚得多。 */
 export function formatSpan(ts, spanS) {
   return `${formatStamp(ts)}–${formatStamp(Number(ts) + Number(spanS))}`
@@ -71,6 +92,20 @@ export function formatSpan(ts, spanS) {
 /** 当前格宽（秒）：优先用响应里的实际值，缺省 60。 */
 export function spanOf(density) {
   return Number(density?.bucket_s ?? 60)
+}
+
+/**
+ * 把"格宽（秒）"说成人话：`30 秒` / `5 分钟` / `60 分钟`。
+ *
+ * 抽出来是因为有两个调用方：概要行（`buildSummary`）与导出提示
+ * （`App.vue` —— 服务端把格子抬粗时要告诉用户实际粒度）。
+ */
+export function formatBucketSpan(spanS) {
+  const seconds = Number(spanS)
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = seconds / 60
+  return `${minutes % 1 === 0 ? minutes : minutes.toFixed(1)} 分钟`
 }
 
 /**
@@ -86,10 +121,7 @@ export function buildSummary(density) {
   const lo = density.range?.lo
   const hi = density.range?.hi
   const spanS = spanOf(density)
-  const spanText =
-    spanS >= 60
-      ? `${spanS % 60 === 0 ? spanS / 60 : (spanS / 60).toFixed(1)} 分钟`
-      : `${spanS} 秒`
+  const spanText = formatBucketSpan(spanS)
   if (lo == null || hi == null) return '该区间内没有数据'
   return `${formatDay(lo)} → ${formatDay(hi)}　每格 ${spanText}　共 ${density.total} 条`
 }
@@ -186,6 +218,67 @@ export function slotGeometry({ count, viewportWidth, scrollable }) {
 export function trackWidth({ count, viewportWidth, scrollable }) {
   if (!scrollable) return viewportWidth
   return count * (MIN_SLOT_PX + 1)
+}
+
+/**
+ * 在**升序**的时间戳数组里找某个时刻对应的下标。
+ *
+ * 用于"点了时间轴某一格 → 把弹幕区滚到那一格"。三种情形：
+ *
+ *   * 命中（`ts <= 目标 < ts + span`）→ 直接给那一格；
+ *   * 目标落在两格之间的空档 → `mode='after'` 给下一格，`mode='nearest'` 给更近的；
+ *   * 目标比所有数据都新 → 给最后一格（"滚到最后"与"看最新"是同一件事）。
+ *
+ * 返回 `-1` 表示数组为空。
+ *
+ * 为什么要支持 `nearest`：`jumpTo` 取的是"该格结束时刻之前的 300 条"，
+ * 若那一格里恰好没数据，窗口右端会落在更早的时刻 —— 此时"最近的一条"才是
+ * 用户想看的那一段。**不要**在这里做二分：调用方的数组最多几百条
+ * （`StreamList.MAX_RENDERED`），线性扫描更简单且没有边界错。
+ */
+export function findTimestampIndex(timestamps, target, spanS, { mode = 'after' } = {}) {
+  const list = timestamps ?? []
+  if (!list.length) return -1
+  if (target == null) return list.length - 1
+  const text = Number(target)
+  const width = Math.max(Number(spanS) || 0, 0)
+
+  let firstAfter = -1
+  for (let index = 0; index < list.length; index += 1) {
+    const value = Number(list[index])
+    if (width > 0 && text >= value && text < value + width) return index
+    if (firstAfter === -1 && value >= text) firstAfter = index
+  }
+  if (firstAfter !== -1) {
+    if (mode !== 'nearest' || firstAfter === 0) return firstAfter
+    const before = Number(list[firstAfter - 1])
+    const after = Number(list[firstAfter])
+    return text - before <= after - text ? firstAfter - 1 : firstAfter
+  }
+  return list.length - 1
+}
+
+/**
+ * 滚动条的滑块宽度与最大偏移（px）。
+ *
+ * 抽成纯函数是为了能离线断言两条容易写错的性质：
+ *   * 滑块宽度 = 视口宽 / 内容宽 × 滚动条轨道宽，且**有最小宽度**
+ *     （内容极长时滑块会细到 1px，鼠标根本抓不住）；
+ *   * `maxScroll` 是**滚动容器的**最大偏移，滑块可移动距离是
+ *     `轨道宽 - 滑块宽` —— 这两个数不是一回事，混用会让滑块滚到头时
+ *     内容还没到头（或反过来）。
+ */
+export function scrollbarMetrics({ contentWidth, viewportWidth, trackPx }) {
+  if (!viewportWidth || !trackPx || contentWidth <= viewportWidth) {
+    return { thumbPx: trackPx || 0, maxThumbOffset: 0, maxScroll: 0 }
+  }
+  const ratio = viewportWidth / contentWidth
+  const thumbPx = Math.max(trackPx * ratio, MIN_THUMB_PX)
+  return {
+    thumbPx,
+    maxThumbOffset: Math.max(trackPx - thumbPx, 0),
+    maxScroll: contentWidth - viewportWidth,
+  }
 }
 
 /**

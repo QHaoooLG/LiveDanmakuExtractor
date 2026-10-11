@@ -31,12 +31,13 @@
 | 实时采集 | 单房间或多房间并发采集，断线自动重连，长时间运行稳定 |
 | 四种落盘格式 | JSONL / CSV / TXT / SQLite 同时写出，内容一致 |
 | Web 面板 | 浏览器实时看弹幕，支持类型与关键词过滤、高额 SC 提示 |
-| 历史复盘 | 翻页浏览全部历史弹幕，底部时间轴可跳转到任意时刻 |
+| 区间曲线时间轴 | 可拖动缩放的密度曲线，点任意时刻跳转；历史翻页不受缓冲上限约束 |
 | 标记与切片 | 给弹幕打标记，按标记区间导出 |
 | 本地分析 | 实时词频、热点突增、疑似刷屏与异常账号检测，全部本地计算 |
 | 弹幕词云 | 输出终端榜单 / JSON / HTML / PNG 四种形式 |
-| SC 汇总与告警 | 统计 SC 金额与贡献榜，可按门槛实时告警 |
+| SC 汇总与告警 | 统计 SC 金额与贡献榜，可实时跟踪并告警 |
 | 扫码登录 | 二维码登录，凭据只保存在本机；不登录也能用 |
+| 低内存占用 | 事件对象与 WebSocket 广播做了瘦身，长时间采集内存平稳 |
 | 桌面形态 | 可选托盘常驻，也可打包为单个 exe 文件（Windows） |
 
 ## 采集范围
@@ -100,8 +101,8 @@ bili-danmaku grab <房间号> --duration 1h --anonymize            # 脱敏输�
 # 过滤
 bili-danmaku grab <房间号> --types danmaku,gift                 # 按事件类型
 bili-danmaku grab <房间号> --keyword 主播 --keyword "re:^\d+$"  # 关键词，re: 前缀走正则
-bili-danmaku grab <房间号> --min-price 30                       # 只要 30 元以上的礼物 / SC / 上舰
 bili-danmaku grab <房间号> --min-medal-level 10 --uid <uid>     # 粉丝牌等级 + uid 白名单
+bili-danmaku grab <房间号> --exclude-masked                     # 丢弃被平台打码的身份
 ```
 
 ### Web 面板
@@ -119,8 +120,12 @@ bili-danmaku web stop                         # 优雅停止（先把未落盘�
 
 端口被占用时会自动向后寻找，实际地址打印在启动日志与 `web status` 里。
 
-面板支持：实时弹幕流、类型与关键词过滤、高额 SC 横幅、位置分布统计、
-历史翻页复盘、时间轴跳转、打标记与按区间导出、本地词频与异常分析。
+面板支持：实时弹幕流、类型与关键词过滤、高额 SC 横幅、
+**区间曲线时间轴**（可拖动、可缩放，点任意时刻跳转）、
+历史翻页复盘（不受内存缓冲上限约束）、打标记与按区间导出、本地词频与异常分析。
+
+自动重连连续失败 5 次后会**暂停**并提示，由你在面板上点「手动重连」再试 ——
+避免用坏的凭据反复打接口。
 
 ### 统计、导出与重放
 
@@ -130,6 +135,9 @@ bili-danmaku export --session <id> --format csv --out out.csv
 bili-danmaku export --keyword 主播 --format jsonl --out hits.jsonl
 bili-danmaku replay data/<房间号>_20260918-14.jsonl --to csv --out converted.csv
 ```
+
+面板上的导出可以选「本次采集」或「所选时段」，文件名形如
+`<主播昵称>_<日期>_<时间>_弹幕导出.csv`。
 
 ### 词云
 
@@ -149,10 +157,15 @@ pip install -e ".[wordcloud]"    # jieba（中文分词）+ wordcloud
 ### SC 汇总与告警
 
 ```bash
-bili-danmaku sc --room <房间号>                  # 条数 / 金额合计 / 贡献榜 / 最近明细
-bili-danmaku sc --room <房间号> --min-price 30   # 只看 30 元及以上
-bili-danmaku sc <房间号> --follow --min-price 30 --duration 3600 --bell   # 实时告警
+bili-danmaku sc --room <房间号>                     # 条数 / 金额合计 / 贡献榜 / 最近明细
+bili-danmaku sc --room <房间号> --since "2026-10-01 20:00"
+bili-danmaku sc --room <房间号> --top 5 --json      # 贡献榜取前 5，JSON 输出
+bili-danmaku sc <房间号> --follow --duration 3600 --bell   # 实时跟踪并告警
 ```
+
+> 金额门槛过滤（`--min-price` / `--price-unit`）已移除 ——
+> 元与金瓜子两种单位混用容易产生 1000 倍的歧义。
+> 只想看 SC 时用类型过滤：`--types super_chat`。
 
 ## 数据产物
 
@@ -182,6 +195,7 @@ anonymize = false            # 脱敏输出
 [sinks]
 types = ["jsonl", "csv", "sqlite"]
 out_dir = "data"
+queue_size = 5000            # 每个 sink 队列的槽位数（内存与抗卡顿的折中）
 
 [web]
 host = "127.0.0.1"           # 绑定非回环地址时必须设置 token

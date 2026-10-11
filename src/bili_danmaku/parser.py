@@ -21,6 +21,21 @@ from .protobuf_lite import decode_base64, extract_strings
 log = logging.getLogger("bili_danmaku.parser")
 
 
+def serialize_raw(msg: dict[str, Any]) -> str | None:
+    """把一帧原始消息序列化成 JSON 文本（`Event.raw` 的取值）。
+
+    见 `models.Event.raw` 的说明：存文本而不是解析后的 dict，单条省 ~2.5 KB。
+    序列化失败时返回 `None` 而不是抛异常 —— 取证数据**永远不该**让采集挂掉；
+    真出现不可序列化的帧（理论上不会有，帧来自 `json.loads`），
+    丢掉的也只是取证副本，归一化字段仍然完好。
+    """
+    try:
+        return json.dumps(msg, ensure_ascii=False)
+    except (TypeError, ValueError):  # pragma: no cover - 帧来自 json.loads，正常不会触发
+        log.warning("原始帧序列化失败，已丢弃取证副本", exc_info=True)
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # 容错取值
 # --------------------------------------------------------------------------- #
@@ -269,7 +284,7 @@ def parse_danmaku(
         is_admin=is_admin,
         field_source=picker.source,
         extra=event_extra,
-        raw=msg if keep_raw else None,
+        raw=serialize_raw(msg) if keep_raw else None,
     )
 
 
@@ -640,7 +655,7 @@ def parse_data_cmd(
         is_anchor=bool(room.anchor_uid and uid and uid == room.anchor_uid),
         field_source=FieldSource.STRUCTURED.value,
         extra=extra,
-        raw=msg if keep_raw else None,
+        raw=serialize_raw(msg) if keep_raw else None,
     )
 
 

@@ -251,7 +251,7 @@ def verify(exe: Path) -> bool:
         log("  ❌ 拿不到结果；stdout/stderr：")
         log(f"     stdout={(result.stdout or '')[:600]}")
         log(f"     stderr={(result.stderr or '')[:600]}")
-        log("     （windowed 版正常现象就是 stdout 为空；请看 build/exe_verify.json）")
+        log("     （windowed 版正常现象就是 stdout 为空；请看 exe_verify.json）")
         return False
 
     for key in ("frozen", "meipass", "find_dist", "index_exists", "started",
@@ -295,7 +295,7 @@ def main() -> int:
     log(f"  * 本次构建：{kind}")
     if not args.console:
         log("    windowed 下 stdout/stderr 为 None：入口脚本会把它们重定向到")
-        log("    `.runtime/web.log`；`verify` 的结果也落在 build/exe_verify.json。")
+        log("    `.runtime/web.log`；`verify` 的结果也落在 exe_verify.json。")
     log(f"  * 运行方式：{exe.name}                  # 双击 = 启动托盘 + 启动面板")
     log(f"              {exe.name} tray --rooms 804456")
     log(f"              {exe.name} verify --json-out build/v.json")

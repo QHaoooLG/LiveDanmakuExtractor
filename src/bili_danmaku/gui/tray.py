@@ -15,7 +15,7 @@
 
 托盘「退出」→ 二次确认 → `PanelController.stop()`（`should_exit` →
 lifespan 的 `panel.stop()` → 每个房间 `bus.stop()` **flush 落盘**）→
-移除托盘图标 → 销毁窗口。**绝不在未 flush 的情况下静默退出**（DEC-3 的核心承诺）。
+移除托盘图标 → 销毁窗口。**绝不在未 flush 的情况下静默退出**。
 """
 
 from __future__ import annotations
@@ -265,7 +265,7 @@ def run_tray(
     用户看到进程活着、窗口在、但 `127.0.0.1:8787` 根本没人监听。
 
     `auto_start=False`（exe 双击的默认）表示**只起托盘 + 显示启动面板，不自动开始采集** ——
-    房间号未定时不该猜（DEC-6 / D4）。
+    房间号未定时不该猜。
     """
     if sys.platform != "win32":
         print("托盘应用目前只支持 Windows（依赖 Shell_NotifyIcon）。", file=sys.stderr)

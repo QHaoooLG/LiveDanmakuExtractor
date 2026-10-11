@@ -17,6 +17,8 @@ from .base import RotatingFileWriter, Sink
 
 class JsonlSink(Sink):
     name = "jsonl"
+    #: jsonl 的一行里带 `raw` 字段（JSON 文本）→ 也算"把原始帧落下来了"
+    persists_raw = True
 
     def __init__(self, config: Config) -> None:
         super().__init__(config)
@@ -30,7 +32,7 @@ class JsonlSink(Sink):
         written_bytes = 0
         for event in events:
             self._writer.ensure_open(event.recv_ts or time.time())
-            line = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+            line = json.dumps(event.to_dict(), ensure_ascii=False)
             written_bytes += self._writer.writeline(line)
             written_events += 1
         self.record(written_events, written_bytes)
