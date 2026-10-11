@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 安全问题 / 凭据泄露风险
-    url: https://github.com/OWNER/REPO/security/advisories/new
-    about: 请不要开公开 issue。请用仓库 Security 标签页的私密漏洞上报渠道，详见 README 的「安全说明」一节
-  - name: 先做一次协议自检
-    url: https://github.com/OWNER/REPO/blob/main/README.md#协议自检-probe
+    url: https://github.com/QHaoooLG/LiveDanmakuExtractor/security/advisories/new
+    about: 请不要开公开 issue。请用仓库 Security 标签页的私密漏洞上报渠道，详见 README 的「隐私与合规」一节
+  - name: 使用说明与协议自检
+    url: https://github.com/QHaoooLG/LiveDanmakuExtractor/blob/main/README.md#使用
     about: 遇到连不上/收不到消息时，先跑 `bili-danmaku probe <房间> --seconds 30`，它是最快的定位材料

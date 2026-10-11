@@ -41,11 +41,10 @@ wordcloud = ["jieba>=0.42", "wordcloud>=1.9"]
 [project.scripts]
 bili-danmaku = "bili_danmaku.cli:main"
 
-# 发布/开源后请把 OWNER/REPO 换成你的真实仓库路径
 [project.urls]
-Homepage = "https://github.com/OWNER/REPO"
-Repository = "https://github.com/OWNER/REPO"
-Issues = "https://github.com/OWNER/REPO/issues"
+Homepage = "https://github.com/QHaoooLG/LiveDanmakuExtractor"
+Repository = "https://github.com/QHaoooLG/LiveDanmakuExtractor"
+Issues = "https://github.com/QHaoooLG/LiveDanmakuExtractor/issues"
 
 [build-system]
 requires = ["setuptools>=68"]
